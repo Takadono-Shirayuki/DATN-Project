@@ -19,8 +19,7 @@ namespace GR2_Project
 
             ProcessStartInfo startInfo = new ProcessStartInfo();
             startInfo.FileName = "python";
-            MessageBox.Show(Application.StartupPath + "yolo_detect.py" + webcamIP);
-            startInfo.Arguments = Application.StartupPath + "yolo_detect.py " + webcamIP;
+            startInfo.Arguments = Application.StartupPath + "AI_model/yolo_detect.py " + webcamIP;
             startInfo.UseShellExecute = false;
             startInfo.RedirectStandardOutput = true;
             startInfo.RedirectStandardError = true;
