@@ -1,3 +1,4 @@
 /GR2-Project/obj/
 /GR2-Project/bin/
 /.vs/
+!GR2-Project/bin/Debug/net8.0-windows/AI_model
