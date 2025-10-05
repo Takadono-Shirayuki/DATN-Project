@@ -1,7 +1,7 @@
-/GR2-Project/bin/
-/GR2-Project/obj/
-/.vs/
-
 # Chỉ loại trừ thư mục AI_model và nội dung bên trong
 !GR2-Project/bin/Debug/net8.0-windows/AI_model/
 !GR2-Project/bin/Debug/net8.0-windows/AI_model/**
+
+/GR2-Project/bin/
+/GR2-Project/obj/
+/.vs/
