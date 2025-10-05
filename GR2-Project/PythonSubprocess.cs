@@ -8,10 +8,11 @@ namespace GR2_Project
         {
             ProcessStartInfo startInfo = new();
             startInfo.FileName = "python";
-            startInfo.Arguments = scriptPath;
+            startInfo.Arguments = Application.StartupPath + "AI_model\\" + scriptPath;
             foreach (var arg in args)
                 startInfo.Arguments += " " + arg;
             startInfo.UseShellExecute = false;
+            startInfo.RedirectStandardInput = true;
             startInfo.RedirectStandardOutput = true;
             startInfo.RedirectStandardError = true;
             startInfo.CreateNoWindow = true;
@@ -22,19 +23,25 @@ namespace GR2_Project
             return process;
         }
 
-        public static void YoloSubProcess(PictureBox displayPictureBox, string webcamIP, CancellationTokenSource cts)
+        public static void YoloSubProcess(PictureBox displayPictureBox, Label fps, Label resolution, string webcamIP, CancellationTokenSource cts, CommandBuffer commandBuffer)
         {
-            Process process = StartProcess("yolo_subprocess.py", new string[] { webcamIP });
-            Stream stdout = process.StandardOutput.BaseStream;
+            int frameCount = 0;
+            TimeOnly startTime = new();
 
-            List<List<float>> detections = new(); // Bounding boxes
-            List<List<List<float>>> keypoints = new(); // Keypoints cho từng người
+            Process process = StartProcess("yolo_detect.py", new string[] { webcamIP });
+            Stream stdout = process.StandardOutput.BaseStream;
 
             StreamReader reader = new(stdout);   // Đọc metadata
             BinaryReader binaryReader = new(stdout); // Đọc ảnh JPEG
 
             while (!cts.IsCancellationRequested)
             {
+                // Kiểm tra lệnh mới cho task (nếu có)
+                string? command = commandBuffer.Command;
+                if (!string.IsNullOrEmpty(command))
+                    process.StandardInput.WriteLine(command);
+
+                // Đọc dòng đầu tiên để kiểm tra metadata
                 string line = reader.ReadLine();
                 if (line == null || line != "--META--")
                     continue;
@@ -48,40 +55,13 @@ namespace GR2_Project
 
                 // Giải mã metadata
                 int imageSize = 0;
-                detections.Clear();
-                keypoints.Clear();
-
                 try
                 {
                     var meta = System.Text.Json.JsonDocument.Parse(json);
                     imageSize = meta.RootElement.GetProperty("size").GetInt32();
-
-                    // Detections: danh sách bounding boxes
-                    foreach (var box in meta.RootElement.GetProperty("detections").EnumerateArray())
-                    {
-                        List<float> coords = new();
-                        foreach (var coord in box.EnumerateArray())
-                            coords.Add(coord.GetSingle());
-                        detections.Add(coords);
-                    }
-
-                    // Keypoints: danh sách các điểm khớp
-                    foreach (var person in meta.RootElement.GetProperty("keypoints").EnumerateArray())
-                    {
-                        List<List<float>> personKeypoints = new();
-                        foreach (var point in person.EnumerateArray())
-                        {
-                            List<float> kp = new();
-                            foreach (var value in point.EnumerateArray())
-                                kp.Add(value.GetSingle());
-                            personKeypoints.Add(kp); // [x, y, conf]
-                        }
-                        keypoints.Add(personKeypoints);
-                    }
                 }
-                catch (Exception ex)
+                catch
                 {
-                    Console.WriteLine("Lỗi khi phân tích metadata: " + ex.Message);
                     continue;
                 }
 
@@ -96,20 +76,33 @@ namespace GR2_Project
                     try
                     {
                         Image img = Image.FromStream(ms);
+                        frameCount++;
                         displayPictureBox.Invoke((MethodInvoker)delegate
                         {
                             displayPictureBox.Image = img;
                         });
-
-                        // 👉 Bạn có thể xử lý detections và keypoints ở đây
-                        // Ví dụ: vẽ khung người và khung xương lên overlay
+                        if (frameCount == 1)
+                        {
+                            startTime = TimeOnly.FromDateTime(DateTime.Now);
+                            resolution.Invoke((MethodInvoker)delegate
+                            {
+                                resolution.Text = $"{img.Width}x{img.Height}";
+                            });
+                        }
+                        else if (frameCount % 10 == 0)
+                        {
+                            TimeSpan elapsed = TimeOnly.FromDateTime(DateTime.Now).ToTimeSpan() - startTime.ToTimeSpan();
+                            double fpsValue = frameCount / elapsed.TotalSeconds;
+                            fps.Invoke((MethodInvoker)delegate
+                            {
+                                fps.Text = $"FPS: {fpsValue:F2}";
+                            });
+                        }
                     }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine("Lỗi khi tạo ảnh từ stream: " + ex.Message);
-                    }
+                    catch { }
                 }
             }
+            process.Kill();
         }
     }
 }

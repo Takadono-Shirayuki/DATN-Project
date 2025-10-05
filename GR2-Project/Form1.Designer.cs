@@ -34,8 +34,16 @@
             button1 = new Button();
             label1 = new Label();
             panel2 = new Panel();
+            groupBox1 = new GroupBox();
+            resolution = new Label();
+            fps = new Label();
+            seg = new CheckBox();
+            pose = new CheckBox();
+            bbox = new CheckBox();
             ((System.ComponentModel.ISupportInitialize)pictureBox1).BeginInit();
             panel1.SuspendLayout();
+            panel2.SuspendLayout();
+            groupBox1.SuspendLayout();
             SuspendLayout();
             // 
             // pictureBox1
@@ -60,6 +68,7 @@
             // 
             // panel1
             // 
+            panel1.BorderStyle = BorderStyle.Fixed3D;
             panel1.Controls.Add(button1);
             panel1.Controls.Add(label1);
             panel1.Controls.Add(textBox1);
@@ -92,11 +101,77 @@
             // 
             // panel2
             // 
+            panel2.BorderStyle = BorderStyle.Fixed3D;
+            panel2.Controls.Add(groupBox1);
+            panel2.Controls.Add(seg);
+            panel2.Controls.Add(pose);
+            panel2.Controls.Add(bbox);
             panel2.Dock = DockStyle.Left;
             panel2.Location = new Point(0, 54);
             panel2.Name = "panel2";
             panel2.Size = new Size(250, 598);
             panel2.TabIndex = 3;
+            // 
+            // groupBox1
+            // 
+            groupBox1.Controls.Add(resolution);
+            groupBox1.Controls.Add(fps);
+            groupBox1.Dock = DockStyle.Bottom;
+            groupBox1.Location = new Point(0, 469);
+            groupBox1.Name = "groupBox1";
+            groupBox1.Size = new Size(246, 125);
+            groupBox1.TabIndex = 3;
+            groupBox1.TabStop = false;
+            groupBox1.Text = "Camera Info";
+            // 
+            // resolution
+            // 
+            resolution.AutoSize = true;
+            resolution.Location = new Point(14, 80);
+            resolution.Name = "resolution";
+            resolution.Size = new Size(0, 29);
+            resolution.TabIndex = 1;
+            // 
+            // fps
+            // 
+            fps.AutoSize = true;
+            fps.Location = new Point(14, 40);
+            fps.Name = "fps";
+            fps.Size = new Size(0, 29);
+            fps.TabIndex = 0;
+            // 
+            // seg
+            // 
+            seg.AutoSize = true;
+            seg.Location = new Point(14, 100);
+            seg.Name = "seg";
+            seg.Size = new Size(185, 33);
+            seg.TabIndex = 2;
+            seg.Text = "Phân đoạn ảnh";
+            seg.UseVisualStyleBackColor = true;
+            seg.CheckedChanged += checkBox3_CheckedChanged;
+            // 
+            // pose
+            // 
+            pose.AutoSize = true;
+            pose.Location = new Point(14, 60);
+            pose.Name = "pose";
+            pose.Size = new Size(175, 33);
+            pose.TabIndex = 1;
+            pose.Text = "Khung xương";
+            pose.UseVisualStyleBackColor = true;
+            pose.CheckedChanged += checkBox2_CheckedChanged;
+            // 
+            // bbox
+            // 
+            bbox.AutoSize = true;
+            bbox.Location = new Point(14, 20);
+            bbox.Name = "bbox";
+            bbox.Size = new Size(165, 33);
+            bbox.TabIndex = 0;
+            bbox.Text = "Hộp giới hạn";
+            bbox.UseVisualStyleBackColor = true;
+            bbox.CheckedChanged += checkBox1_CheckedChanged;
             // 
             // Form1
             // 
@@ -113,6 +188,10 @@
             ((System.ComponentModel.ISupportInitialize)pictureBox1).EndInit();
             panel1.ResumeLayout(false);
             panel1.PerformLayout();
+            panel2.ResumeLayout(false);
+            panel2.PerformLayout();
+            groupBox1.ResumeLayout(false);
+            groupBox1.PerformLayout();
             ResumeLayout(false);
         }
 
@@ -124,5 +203,11 @@
         private Button button1;
         private Label label1;
         private Panel panel2;
+        private CheckBox bbox;
+        private CheckBox seg;
+        private CheckBox pose;
+        private GroupBox groupBox1;
+        private Label resolution;
+        private Label fps;
     }
 }
