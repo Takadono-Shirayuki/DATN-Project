@@ -7,11 +7,18 @@ import torch
 import clip
 from PIL import Image
 
+#----------------------------------------------------------------------------------------------------------------------------------------------------
+# Các biến toàn cục và hàm hỗ trợ
 # Trạng thái điều khiển
 class State:
-    enable_bbox = True
-    enable_pose = False
-    enable_segmentation = False
+    mode = None
+    class Camera:
+        enable_bbox = False
+        enable_pose = False
+        enable_segmentation = False
+    class ObjectBox:
+        tracking_id = None
+        enable_segmentation = False
 
 # Cấu trúc khung xương COCO
 skeleton = [
@@ -21,16 +28,20 @@ skeleton = [
     (11, 13), (13, 15), (12, 14), (14, 16)
 ]
 
+#----------------------------------------------------------------------------------------------------------------------------------------------------
 # Model CLIP để phân loại tư thế
 # Tải mô hình CLIP
 device = "cuda" if torch.cuda.is_available() else "cpu"
-clip_model, preprocess = clip.load("ViT-B/32", device=device)
+if os.path.exists("ViT-B-32.pt"):
+    clip_model, preprocess = clip.load("./ViT-B-32.pt", device=device)
+else:
+    clip_model, preprocess = clip.load("ViT-B/32", device=device)
 
 # Danh sách mô tả tư thế
 text_labels = [
     "a person walking",
     "a person running",
-    "a person standing",
+    # "a person standing",
     "a person not standing",
 ]
 text_tokens = clip.tokenize(text_labels).to(device)
@@ -53,22 +64,51 @@ def classify_pose_with_clip(image_np):
     best_index = probs.argmax()
     return text_labels[best_index], probs[best_index]
 
+#----------------------------------------------------------------------------------------------------------------------------------------------------
+# Phương thức giao tiếp với C#
 # Lệnh từ C#
 def listen_commands():
     global State
     for line in sys.stdin:
         cmd = line.strip().lower()
-        if cmd == "bbox_on": State.enable_bbox = True
-        elif cmd == "bbox_off": State.enable_bbox = False
-        elif cmd == "pose_on": State.enable_pose = True
-        elif cmd == "pose_off": State.enable_pose = False
-        elif cmd == "seg_on": State.enable_segmentation = True
-        elif cmd == "seg_off": State.enable_segmentation = False
+        if cmd == "bbox_on": State.Camera.enable_bbox = True
+        elif cmd == "bbox_off": State.Camera.enable_bbox = False
+        elif cmd == "pose_on": State.Camera.enable_pose = True
+        elif cmd == "pose_off": State.Camera.enable_pose = False
+        elif cmd == "seg_on": 
+            if State.mode == "camera": 
+                State.Camera.enable_segmentation = True
+            elif State.mode == "object_box":
+                State.ObjectBox.enable_segmentation = True
+        elif cmd == "seg_off": 
+            if State.mode == "camera": 
+                State.Camera.enable_segmentation = False
+            elif State.mode == "object_box":
+                State.ObjectBox.enable_segmentation = False
+        elif cmd == "change_mode camera": State.mode = "camera"
+        elif cmd == "change_mode object_box": State.mode = "object_box"
 
+# Gửi dữ liệu về C#
+def write_output(meta, data):
+    meta_json = json.dumps(meta).encode('utf-8')
+
+    try:
+        sys.stdout.buffer.write(b'--META--\n')
+        sys.stdout.buffer.write(meta_json)
+        sys.stdout.buffer.write(b'\n--ENDMETA--\n')
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.write(b'\n')
+        sys.stdout.flush()
+        return True
+    except BrokenPipeError:
+        print("⚠️ Mất kết nối với tiến trình chính, dừng gửi ảnh.")
+        return False
+
+#----------------------------------------------------------------------------------------------------------------------------------------------------
+# Xử lý chế độ chung
 # Gán ID
 ids = []
 nonce = 0
-
 def assign_id_for_person(keypoints, cropped, conf_threshold=0.3):
     global ids, nonce
 
@@ -134,21 +174,6 @@ def draw_pose(frame, keypoints):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
         cv2.line(frame, (int(keypoints[0][0]), int(keypoints[0][1])), (x_mid, y_mid), (0, 255, 255), 2)
 
-# Gửi dữ liệu về C#
-def write_output(meta, data):
-    meta_json = json.dumps(meta).encode('utf-8')
-
-    try:
-        sys.stdout.buffer.write(b'--META--\n')
-        sys.stdout.buffer.write(meta_json)
-        sys.stdout.buffer.write(b'\n--ENDMETA--\n')
-        sys.stdout.buffer.write(data)
-        sys.stdout.buffer.write(b'\n')
-        sys.stdout.flush()
-        return True
-    except BrokenPipeError:
-        print("⚠️ Mất kết nối với tiến trình chính, dừng gửi ảnh.")
-        return False
 
 # Phân đoạn người
 def segmentation(input_frame, output_frame, seg_model, type = 'Foreground'):
@@ -164,27 +189,76 @@ def segmentation(input_frame, output_frame, seg_model, type = 'Foreground'):
             output_frame = cv2.bitwise_and(output_frame, output_frame, mask=combined_mask)
     return output_frame
 
+# Cắt và thay đổi kích thước ảnh
+def crop_and_resize(frame, center, box_size, resize=(224, 224)):
+    x1 = int(center[0] - box_size[0] / 2)
+    y1 = int(center[1] - box_size[1] / 2)
+    x2 = int(center[0] + box_size[0] / 2)
+    y2 = int(center[1] + box_size[1] / 2)
+    cropped = frame[y1:y2, x1:x2]
+    if cropped.size == 0:
+        return None
+    resized = cv2.resize(cropped, resize)
+    return resized
+
+# Ước lượng chiều cao người (dựa trên khoảng cách vai - hông)
+def estimate_height(keypoints):
+    if keypoints[5][2] < 0.3 or keypoints[6][2] < 0.3 or keypoints[11][2] < 0.3 or keypoints[12][2] < 0.3:
+        return None
+    shoulder_y = (keypoints[5][1] + keypoints[6][1]) / 2
+    hip_y = (keypoints[11][1] + keypoints[12][1]) / 2
+    height = 4.5 * abs(hip_y - shoulder_y)
+    return height
+
+#----------------------------------------------------------------------------------------------------------------------------------------------------
+# Xử lý chế độ camera
 # Nhận diện hộp giới hạn và khung xương
 def detect_pose(input_frame, output_frame, pose_model):
+    active_labels = set()
+    pose_results = pose_model.predict(source=input_frame, save=False, conf=0.5, verbose=False)
+    
+    for box, kp in zip(pose_results[0].boxes.xyxy, pose_results[0].keypoints.data):
+        keypoints = [[round(x, 2), round(y, 2), round(c, 2)] for x, y, c in kp.tolist()]
+        cropped = input_frame[int(box[1]):int(box[3]), int(box[0]):int(box[2])]
+        id, label, standing = assign_id_for_person(keypoints, cropped)
+        if not standing:
+            continue
+        active_labels.add(id)
+        if State.Camera.enable_bbox:
+            x1, y1, x2, y2 = map(int, box.tolist())
+            cv2.rectangle(output_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(output_frame, label, (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+        if State.Camera.enable_pose:
+            draw_pose(output_frame, keypoints)
+    cleanup_ids(active_labels)
+    return output_frame
+#----------------------------------------------------------------------------------------------------------------------------------------------------
+def separate_object(input_frame, pose_model):
+    output_frames = {}
     active_labels = set()
     pose_results = pose_model.predict(source=input_frame, save=False, conf=0.5, verbose=False)
     for box, kp in zip(pose_results[0].boxes.xyxy, pose_results[0].keypoints.data):
         keypoints = [[round(x, 2), round(y, 2), round(c, 2)] for x, y, c in kp.tolist()]
         cropped = input_frame[int(box[1]):int(box[3]), int(box[0]):int(box[2])]
-        id, label, moving = assign_id_for_person(keypoints, cropped)
-        if not moving:
+        id, label, standing = assign_id_for_person(keypoints, cropped)
+        if not standing:
             continue
         active_labels.add(id)
-        if State.enable_bbox:
-            x1, y1, x2, y2 = map(int, box.tolist())
-            cv2.rectangle(output_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(output_frame, label, (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-            
-        if State.enable_pose:
-            draw_pose(output_frame, keypoints)
-    if len(active_labels) > 0:
-        count = sum(1 for file in os.listdir('AI_model/temp') if file.startswith('Person_') and file.endswith('.jpg'))
-        cv2.imwrite(f'AI_model/temp/Person_{count}.jpg', output_frame)
+        # Tính center bằng cách lấy trung bình keypoints 5 6 11 12
+        center_x = int((keypoints[5][0] + keypoints[6][0] + keypoints[11][0] + keypoints[12][0]) / 4)
+        center_y = int((keypoints[5][1] + keypoints[6][1] + keypoints[11][1] + keypoints[12][1]) / 4)
+        center = (center_x, center_y)
+
+        # Ước lượng chiều cao người
+        height = estimate_height(keypoints)
+        if height is None:
+            continue
+
+        # Cắt và thay đổi kích thước ảnh
+        output_frames[id]['image'] = crop_and_resize(input_frame, center, (height, height), resize=(224, 224))
+        output_frames[id]['label'] = label
     cleanup_ids(active_labels)
-    return output_frame
+    return output_frames
+

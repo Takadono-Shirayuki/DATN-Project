@@ -8,7 +8,7 @@ namespace GR2_Project
         {
             ProcessStartInfo startInfo = new();
             startInfo.FileName = "python";
-            startInfo.Arguments = Application.StartupPath + "AI_model\\" + scriptPath;
+            startInfo.Arguments = scriptPath;
             foreach (var arg in args)
                 startInfo.Arguments += " " + arg;
             startInfo.UseShellExecute = false;
@@ -16,6 +16,8 @@ namespace GR2_Project
             startInfo.RedirectStandardOutput = true;
             startInfo.RedirectStandardError = true;
             startInfo.CreateNoWindow = true;
+            startInfo.WorkingDirectory = Application.StartupPath + "AI_model\\";
+
             Process process = new();
             process.StartInfo = startInfo;
             if (start)
@@ -23,86 +25,104 @@ namespace GR2_Project
             return process;
         }
 
-        public static void YoloSubProcess(PictureBox displayPictureBox, Label fps, Label resolution, string webcamIP, CancellationTokenSource cts, CommandBuffer commandBuffer)
+        // Thêm scriptName để khởi camera.py hoặc object_box.py
+        public static void YoloSubProcess(string scriptName, string mode, PictureBox displayPictureBox, Label fps, Label resolution, string webcamIP, CancellationTokenSource cts, CommandBuffer commandBuffer)
         {
             int frameCount = 0;
             TimeOnly startTime = new();
 
-            Process process = StartProcess("yolo_detect.py", new string[] { webcamIP });
+            if (webcamIP == "")
+                webcamIP = "0";
+
+            Process process = StartProcess(scriptName, new string[] { webcamIP, mode });
             Stream stdout = process.StandardOutput.BaseStream;
 
             StreamReader reader = new(stdout);   // Đọc metadata
             BinaryReader binaryReader = new(stdout); // Đọc ảnh JPEG
 
-            while (!cts.IsCancellationRequested)
+            try
             {
-                // Kiểm tra lệnh mới cho task (nếu có)
-                string? command = commandBuffer.Command;
-                if (!string.IsNullOrEmpty(command))
-                    process.StandardInput.WriteLine(command);
-
-                // Đọc dòng đầu tiên để kiểm tra metadata
-                string line = reader.ReadLine();
-                if (line == null || line != "--META--")
-                    continue;
-
-                // Đọc metadata JSON
-                string json = "";
-                while ((line = reader.ReadLine()) != null && line != "--ENDMETA--")
+                while (!cts.IsCancellationRequested)
                 {
-                    json += line;
-                }
+                    // Kiểm tra lệnh mới cho task (nếu có)
+                    string? command = commandBuffer?.Command;
+                    if (!string.IsNullOrEmpty(command))
+                    {
+                        try
+                        {
+                            process.StandardInput.WriteLine(command);
+                        }
+                        catch { }
+                    }
 
-                // Giải mã metadata
-                int imageSize = 0;
-                try
-                {
-                    var meta = System.Text.Json.JsonDocument.Parse(json);
-                    imageSize = meta.RootElement.GetProperty("size").GetInt32();
-                }
-                catch
-                {
-                    continue;
-                }
+                    // Đọc dòng đầu tiên để kiểm tra metadata
+                    string line = reader.ReadLine();
+                    if (line == null || line != "--META--")
+                        continue;
 
-                // Đọc đúng số byte của ảnh JPEG
-                byte[] imageData = binaryReader.ReadBytes(imageSize);
-                if (imageData.Length != imageSize)
-                    continue;
-
-                // Hiển thị ảnh lên PictureBox
-                using (MemoryStream ms = new(imageData))
-                {
+                    // Đọc metadata JSON
+                    string json = "";
+                    while ((line = reader.ReadLine()) != null && line != "--ENDMETA--")
+                    {
+                        json += line;
+                    }
+                    // Giải mã metadata
+                    int imageSize = 0;
                     try
                     {
-                        Image img = Image.FromStream(ms);
-                        frameCount++;
-                        displayPictureBox.Invoke((MethodInvoker)delegate
-                        {
-                            displayPictureBox.Image = img;
-                        });
-                        if (frameCount == 1)
-                        {
-                            startTime = TimeOnly.FromDateTime(DateTime.Now);
-                            resolution.Invoke((MethodInvoker)delegate
-                            {
-                                resolution.Text = $"{img.Width}x{img.Height}";
-                            });
-                        }
-                        else if (frameCount % 10 == 0)
-                        {
-                            TimeSpan elapsed = TimeOnly.FromDateTime(DateTime.Now).ToTimeSpan() - startTime.ToTimeSpan();
-                            double fpsValue = frameCount / elapsed.TotalSeconds;
-                            fps.Invoke((MethodInvoker)delegate
-                            {
-                                fps.Text = $"FPS: {fpsValue:F2}";
-                            });
-                        }
+                        var meta = System.Text.Json.JsonDocument.Parse(json);
+                        imageSize = meta.RootElement.GetProperty("size").GetInt32();
+                        Debug.WriteLine(json);
                     }
-                    catch { }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    // Đọc đúng số byte của ảnh JPEG
+                    byte[] imageData = binaryReader.ReadBytes(imageSize);
+                    if (imageData.Length != imageSize)
+                        continue;
+
+                    // Hiển thị ảnh lên PictureBox
+                    using (MemoryStream ms = new(imageData))
+                    {
+                        try
+                        {
+                            Image img = Image.FromStream(ms);
+                            frameCount++;
+                            displayPictureBox.Invoke((MethodInvoker)delegate
+                            {
+                                displayPictureBox.Image = img;
+                            });
+                            if (frameCount == 1)
+                            {
+                                startTime = TimeOnly.FromDateTime(DateTime.Now);
+                                resolution.Invoke((MethodInvoker)delegate
+                                {
+                                    resolution.Text = $"{img.Width}x{img.Height}";
+                                });
+                            }
+                            else if (frameCount % 10 == 0)
+                            {
+                                TimeSpan elapsed = TimeOnly.FromDateTime(DateTime.Now).ToTimeSpan() - startTime.ToTimeSpan();
+                                double fpsValue = frameCount / elapsed.TotalSeconds;
+                                fps.Invoke((MethodInvoker)delegate
+                                {
+                                    fps.Text = $"FPS: {fpsValue:F2}";
+                                });
+                            }
+                        }
+                        catch { }
+                    }
                 }
             }
-            process.Kill();
+            catch { }
+            finally
+            {
+                try { if (!process.HasExited) process.Kill(); } catch { }
+                try { process.Dispose(); } catch { }
+            }
         }
     }
 }
