@@ -7,13 +7,13 @@ namespace GR2_Project
         public const string BBOX = "bbox";
         public const string POSE = "pose";
         public const string SEG = "seg";
-        public const string CAMERA_MODE = "camera";
-        public const string OBJECT_BOX_MODE = "object_box";
+        public const string CAMERA_SCRIPT_NAME = "camera.py";
+        public const string OBJECT_BOX_SCRIPT_NAME = "object_box.py";
 
-        private string mode;
-        public CommandBuffer(string mode)
+        private string scriptName;
+        public CommandBuffer(string scriptName)
         {
-            this.mode = mode;
+            this.scriptName = scriptName;
         }
 
         private string command = string.Empty;
@@ -38,7 +38,7 @@ namespace GR2_Project
             }
             set
             {
-                if (mode == CAMERA_MODE)
+                if (scriptName == CAMERA_SCRIPT_NAME)
                 {
                     if (cameraOptions.ContainsKey(value))
                     {
@@ -50,7 +50,7 @@ namespace GR2_Project
                         command = string.Empty;
                     }
                 }
-                else if (mode == OBJECT_BOX_MODE)
+                else if (scriptName == OBJECT_BOX_SCRIPT_NAME)
                 {
                     if (objectBoxOptions.ContainsKey(value))
                     {

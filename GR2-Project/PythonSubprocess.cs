@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using GR2_Project.Classes;
+using System.Diagnostics;
 
 namespace GR2_Project
 {
@@ -24,9 +25,9 @@ namespace GR2_Project
                 process.Start();
             return process;
         }
-
+        
         // Thêm scriptName để khởi camera.py hoặc object_box.py
-        public static void YoloSubProcess(string scriptName, string mode, PictureBox displayPictureBox, Label fps, Label resolution, string webcamIP, CancellationTokenSource cts, CommandBuffer commandBuffer)
+        public static void YoloSubProcess(string scriptName, YoloSubProcessVariables yoloSubProcessVariables, string webcamIP, CancellationTokenSource cts, CommandBuffer commandBuffer)
         {
             int frameCount = 0;
             TimeOnly startTime = new();
@@ -34,7 +35,7 @@ namespace GR2_Project
             if (webcamIP == "")
                 webcamIP = "0";
 
-            Process process = StartProcess(scriptName, new string[] { webcamIP, mode });
+            Process process = StartProcess(scriptName, new string[] { webcamIP });
             Stream stdout = process.StandardOutput.BaseStream;
 
             StreamReader reader = new(stdout);   // Đọc metadata
@@ -71,8 +72,12 @@ namespace GR2_Project
                     try
                     {
                         var meta = System.Text.Json.JsonDocument.Parse(json);
+                        bool end = meta.RootElement.TryGetProperty("end", out _);
+                        if (end)
+                            break; // Kết thúc nếu có trường "end"
+                        string objectID = meta.RootElement.TryGetProperty("object_id", out var objIdProp) ? objIdProp.GetString() ?? "" : "";
+                        yoloSubProcessVariables.ObjectID = objectID;
                         imageSize = meta.RootElement.GetProperty("size").GetInt32();
-                        Debug.WriteLine(json);
                     }
                     catch
                     {
@@ -91,26 +96,17 @@ namespace GR2_Project
                         {
                             Image img = Image.FromStream(ms);
                             frameCount++;
-                            displayPictureBox.Invoke((MethodInvoker)delegate
-                            {
-                                displayPictureBox.Image = img;
-                            });
+                            yoloSubProcessVariables.Image = img;
                             if (frameCount == 1)
                             {
                                 startTime = TimeOnly.FromDateTime(DateTime.Now);
-                                resolution.Invoke((MethodInvoker)delegate
-                                {
-                                    resolution.Text = $"{img.Width}x{img.Height}";
-                                });
+                                yoloSubProcessVariables.FrameWidth = img.Width;
+                                yoloSubProcessVariables.FrameHeight = img.Height;
                             }
                             else if (frameCount % 10 == 0)
                             {
                                 TimeSpan elapsed = TimeOnly.FromDateTime(DateTime.Now).ToTimeSpan() - startTime.ToTimeSpan();
-                                double fpsValue = frameCount / elapsed.TotalSeconds;
-                                fps.Invoke((MethodInvoker)delegate
-                                {
-                                    fps.Text = $"FPS: {fpsValue:F2}";
-                                });
+                                yoloSubProcessVariables.Fps = frameCount / elapsed.TotalSeconds;
                             }
                         }
                         catch { }

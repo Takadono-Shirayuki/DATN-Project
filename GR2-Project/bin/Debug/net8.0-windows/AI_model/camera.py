@@ -17,6 +17,9 @@ sys.stderr = open(os.devnull, 'w')
 input = sys.argv[1] if len(sys.argv) > 1 else '0'
 if input == '0':
     input = 0
+elif input.lower().endswith('.mp4'):
+    # Nếu là file mp4 trên máy, sử dụng đường dẫn trực tiếp
+    input = input
 else:
     input = f'http://{input}:4747/video'
 cap = cv2.VideoCapture(input)
@@ -43,3 +46,6 @@ while cap.isOpened():
         break
     run_camera_mode(frame)
 cap.release()
+
+end_meta_data = { 'end': True }
+write_output(end_meta_data, b'')
