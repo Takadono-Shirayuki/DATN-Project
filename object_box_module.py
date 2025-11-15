@@ -6,9 +6,8 @@ import threading
 import queue
 import numpy as np
 from ultralytics import YOLO
-from detector import YOLOPersonDetector
 from recorder import Recorder
-from object_box_lib import separate_object
+from object_box_lib import separate_object_gpu_tracking
 from pose_visualizer import draw_keypoints_on_frame
 import logging
 
@@ -19,11 +18,14 @@ class ObjectBoxModule:
         self.thread = None
         self.frame_queue = queue.Queue(maxsize=2)
         
-        # Models
-        self.detector = None
+        # Models (only 2 needed with tracking!)
         self.seg_model = None
         self.pose_model = None
         self.recorder = None
+        
+        # Tracking settings
+        self.scale_factor = 0.5  # Resolution scaling for speed
+        self.tracker = 'bytetrack.yaml'
         
         # Settings
         self.enable_pose = False
@@ -62,14 +64,11 @@ class ObjectBoxModule:
         if not self.cap.isOpened():
             return False
         
-        # Load models
-        if self.detector is None:
-            self.detector = YOLOPersonDetector(model_path='yolov8n.pt', 
-                                              conf_thresh=0.3, use_tracking=True)
+        # Load models (only 2 models needed!)
         if self.seg_model is None:
-            self.seg_model = YOLO('yolov8s-seg.pt')
+            self.seg_model = YOLO('yolov8s-seg.pt').to('cuda')  # GPU accelerated
         if self.pose_model is None:
-            self.pose_model = YOLO('yolov8s-pose.pt')
+            self.pose_model = YOLO('yolov8s-pose.pt').to('cuda')  # GPU accelerated
         
         # Initialize recorder
         fps = self.cap.get(cv2.CAP_PROP_FPS) or 25.0
@@ -126,12 +125,14 @@ class ObjectBoxModule:
     
     def _process_frame(self, frame):
         """Process a single frame based on enabled features"""
-        # Separate objects (persons)
-        output_frames = separate_object(
+        # Separate objects (persons) using GPU-accelerated tracking
+        output_frames = separate_object_gpu_tracking(
             frame, 
-            self.detector, 
-            seg_model=self.seg_model if self.enable_segmentation else None,
+            seg_model=self.seg_model,  # Handles detection + segmentation + tracking
             pose_model=self.pose_model if self.enable_pose else None,
+            scale_factor=self.scale_factor,
+            tracker=self.tracker,
+            enable_segmentation=self.enable_segmentation  # Control mask via checkbox
         )
         
         # Update person list
