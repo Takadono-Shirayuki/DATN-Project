@@ -2,12 +2,12 @@
 Simple Camera UI using tkinter
 """
 import tkinter as tk
-from tkinter import ttk
 import threading
 import cv2
 from PIL import Image, ImageTk
 from camera_module import CameraModule
 from object_box_module import ObjectBoxModule
+from dataset_manager import DatasetManager
 import os
 
 class CameraApp:
@@ -20,8 +20,12 @@ class CameraApp:
         self.webcam_ip = tk.StringVar()
         self.loaded = False
         self.running = False
-        self.current_tab = 0  # 0: Camera, 1: Object Box, 2: Recorder
+        self.current_tab = 0  # 0: Camera, 1: Object Box, 2: Recorder, 3: Dataset
         self.update_thread = None
+        
+        # Dataset processing
+        self.selected_files = []
+        self.dataset_processing = False
         
         # FPS tracking
         self.frame_count = 0
@@ -32,6 +36,7 @@ class CameraApp:
         # Modules
         self.camera_module = CameraModule()
         self.objectbox_module = ObjectBoxModule()
+        self.dataset_manager = DatasetManager()
         
         # Top frame for tabs and controls
         top_frame = tk.Frame(root)
@@ -55,6 +60,11 @@ class CameraApp:
                                            font=("Segoe UI", 12),
                                            command=lambda: self.switch_tab(2))
         self.recorder_tab_btn.pack(side=tk.LEFT, padx=2)
+        
+        self.dataset_tab_btn = tk.Button(tab_button_frame, text="Dataset", width=15,
+                                          font=("Segoe UI", 12),
+                                          command=lambda: self.switch_tab(3))
+        self.dataset_tab_btn.pack(side=tk.LEFT, padx=2)
         
         # Webcam input (for Camera tab)
         self.webcam_frame = tk.Frame(top_frame)
@@ -181,12 +191,116 @@ class CameraApp:
         tk.Button(self.left_panel_recorder, text="Play", width=15, 
                  font=("Segoe UI", 10)).pack(pady=15)
         
+        # Left panel - Dataset tab content (initially hidden)
+        self.left_panel_dataset = tk.Frame(self.left_container, relief=tk.RAISED, borderwidth=1)
+        self.left_panel_dataset.pack_propagate(False)
+        
+        # Dataset controls
+        tk.Label(self.left_panel_dataset, text="Dataset Generator", 
+                font=("Segoe UI", 11, "bold")).pack(pady=15, anchor=tk.W, padx=10)
+        
+        # Note: Pose and Segmentation are always enabled for dataset generation
+        tk.Label(self.left_panel_dataset, text="✓ Pose keypoints enabled\n✓ Segmentation mask enabled", 
+                font=("Segoe UI", 9), fg="green", justify=tk.LEFT).pack(anchor=tk.W, padx=15, pady=5)
+        
+        # File selection
+        tk.Label(self.left_panel_dataset, text="Video files:", 
+                font=("Segoe UI", 10, "bold")).pack(pady=(20,5), anchor=tk.W, padx=10)
+        
+        # File listbox
+        file_frame = tk.Frame(self.left_panel_dataset)
+        file_frame.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
+        
+        scrollbar = tk.Scrollbar(file_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.file_listbox = tk.Listbox(file_frame, height=8, font=("Segoe UI", 9),
+                                       yscrollcommand=scrollbar.set)
+        self.file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.file_listbox.yview)
+        
+        # Buttons
+        btn_frame = tk.Frame(self.left_panel_dataset)
+        btn_frame.pack(pady=10)
+        
+        tk.Button(btn_frame, text="Add Files", width=12, 
+                 font=("Segoe UI", 10), command=self.add_dataset_files).pack(side=tk.LEFT, padx=2)
+        tk.Button(btn_frame, text="Clear", width=12, 
+                 font=("Segoe UI", 10), command=self.clear_dataset_files).pack(side=tk.LEFT, padx=2)
+        
+        # Process button
+        self.process_dataset_btn = tk.Button(self.left_panel_dataset, text="Process Dataset", 
+                                            width=20, font=("Segoe UI", 10, "bold"),
+                                            command=self.process_dataset)
+        self.process_dataset_btn.pack(pady=15)
+        
+        # Dataset management section
+        tk.Label(self.left_panel_dataset, text="Dataset Management:", 
+                font=("Segoe UI", 10, "bold")).pack(pady=(20,5), anchor=tk.W, padx=10)
+        
+        # Processed videos listbox
+        mgmt_frame = tk.Frame(self.left_panel_dataset)
+        mgmt_frame.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
+        
+        mgmt_scrollbar = tk.Scrollbar(mgmt_frame)
+        mgmt_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.processed_listbox = tk.Listbox(mgmt_frame, height=6, font=("Segoe UI", 8),
+                                           yscrollcommand=mgmt_scrollbar.set)
+        self.processed_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        mgmt_scrollbar.config(command=self.processed_listbox.yview)
+        
+        # Management buttons
+        mgmt_btn_frame = tk.Frame(self.left_panel_dataset)
+        mgmt_btn_frame.pack(pady=5)
+        
+        tk.Button(mgmt_btn_frame, text="Delete Selected", width=12, 
+                 font=("Segoe UI", 9), command=self.delete_selected_dataset).pack(side=tk.LEFT, padx=2)
+        tk.Button(mgmt_btn_frame, text="Refresh", width=12, 
+                 font=("Segoe UI", 9), command=self.refresh_dataset_list).pack(side=tk.LEFT, padx=2)
+        
+        # Stats label
+        self.dataset_stats_label = tk.Label(self.left_panel_dataset, text="", 
+                                           font=("Segoe UI", 8), fg="gray")
+        self.dataset_stats_label.pack(pady=5)
+        
         # Right panel (video display)
         right_panel = tk.Frame(main_frame, relief=tk.SUNKEN, borderwidth=2, bg="black")
         right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
+        # Video label (main display)
         self.video_label = tk.Label(right_panel, bg="black")
         self.video_label.pack(fill=tk.BOTH, expand=True)
+        
+        # Info overlay frame (for dataset progress, etc)
+        self.info_overlay_frame = tk.Frame(right_panel, bg="#1e1e1e", relief=tk.RAISED, borderwidth=2)
+        
+        # Dataset processing info (hidden by default)
+        self.dataset_info_container = tk.Frame(self.info_overlay_frame, bg="#1e1e1e")
+        self.dataset_info_container.pack(pady=20, padx=20, fill=tk.BOTH, expand=True)
+        
+        tk.Label(self.dataset_info_container, text="Dataset Processing", 
+                font=("Segoe UI", 14, "bold"), bg="#1e1e1e", fg="white").pack(pady=(0,15))
+        
+        # Progress bar style info
+        self.dataset_current_file_label = tk.Label(self.dataset_info_container, 
+                                                   text="", 
+                                                   font=("Segoe UI", 11), 
+                                                   bg="#1e1e1e", fg="#00ff00",
+                                                   wraplength=600)
+        self.dataset_current_file_label.pack(pady=5)
+        
+        self.dataset_frame_progress_label = tk.Label(self.dataset_info_container, 
+                                                     text="", 
+                                                     font=("Segoe UI", 10), 
+                                                     bg="#1e1e1e", fg="#aaaaaa")
+        self.dataset_frame_progress_label.pack(pady=5)
+        
+        self.dataset_summary_label = tk.Label(self.dataset_info_container, 
+                                              text="", 
+                                              font=("Segoe UI", 11, "bold"), 
+                                              bg="#1e1e1e", fg="#ffaa00")
+        self.dataset_summary_label.pack(pady=15)
         
         # Status label
         self.status_label = tk.Label(root, text="Ready", anchor=tk.W, font=("Segoe UI", 10))
@@ -203,11 +317,13 @@ class CameraApp:
         self.camera_tab_btn.config(font=("Segoe UI", 12), relief=tk.RAISED)
         self.objectbox_tab_btn.config(font=("Segoe UI", 12), relief=tk.RAISED)
         self.recorder_tab_btn.config(font=("Segoe UI", 12), relief=tk.RAISED)
+        self.dataset_tab_btn.config(font=("Segoe UI", 12), relief=tk.RAISED)
         
         # Hide all panels
         self.left_panel_camera.pack_forget()
         self.left_panel_objectbox.pack_forget()
         self.left_panel_recorder.pack_forget()
+        self.left_panel_dataset.pack_forget()
         
         if tab_index == 0:  # Camera tab
             self.camera_tab_btn.config(font=("Segoe UI", 12, "bold"), relief=tk.SUNKEN)
@@ -227,7 +343,7 @@ class CameraApp:
             
             self.status_label.config(text="Object Box tab selected")
             
-        else:  # Recorder tab
+        elif tab_index == 2:  # Recorder tab
             self.recorder_tab_btn.config(font=("Segoe UI", 12, "bold"), relief=tk.SUNKEN)
             self.left_panel_recorder.pack(fill=tk.BOTH, expand=True)
             
@@ -238,6 +354,22 @@ class CameraApp:
             
             # Load video list
             self.load_video_list()
+            
+        else:  # Dataset tab (tab_index == 3)
+            self.dataset_tab_btn.config(font=("Segoe UI", 12, "bold"), relief=tk.SUNKEN)
+            self.left_panel_dataset.pack(fill=tk.BOTH, expand=True)
+            
+            # Hide webcam controls
+            self.webcam_frame.pack_forget()
+            
+            # Show info overlay if processing
+            if self.dataset_processing:
+                self.info_overlay_frame.place(relx=0.5, rely=0.5, anchor=tk.CENTER, width=700, height=300)
+            
+            # Refresh dataset list
+            self.refresh_dataset_list()
+            
+            self.status_label.config(text="Dataset tab selected")
     
     def load_video_list(self):
         """Load list of recorded videos"""
@@ -464,6 +596,234 @@ class CameraApp:
                 pose=self.obj_pose_var.get(),
                 segmentation=self.obj_seg_var.get()
             )
+    
+    def add_dataset_files(self):
+        """Open file dialog to add video files"""
+        from tkinter import filedialog
+        
+        files = filedialog.askopenfilenames(
+            title="Select Video Files",
+            filetypes=[
+                ("Video files", "*.mp4 *.avi *.mov *.mkv"),
+                ("All files", "*.*")
+            ]
+        )
+        
+        for file in files:
+            if file not in self.selected_files:
+                self.selected_files.append(file)
+                # Display only filename in listbox
+                self.file_listbox.insert(tk.END, os.path.basename(file))
+        
+        self.status_label.config(text=f"Added {len(files)} file(s). Total: {len(self.selected_files)}")
+    
+    def clear_dataset_files(self):
+        """Clear all selected files"""
+        self.selected_files.clear()
+        self.file_listbox.delete(0, tk.END)
+        self.status_label.config(text="File list cleared")
+    
+    def refresh_dataset_list(self):
+        """Refresh processed videos list"""
+        self.processed_listbox.delete(0, tk.END)
+        
+        processed = self.dataset_manager.get_processed_list()
+        for video in processed:
+            self.processed_listbox.insert(tk.END, video)
+        
+        # Update stats
+        stats = self.dataset_manager.get_dataset_stats()
+        stats_text = f"Processed: {stats['videos']} videos | Files: {stats['mp4_files']} MP4, {stats['json_files']} JSON"
+        self.dataset_stats_label.config(text=stats_text)
+        
+        self.status_label.config(text=f"Refreshed: {len(processed)} processed videos")
+    
+    def delete_selected_dataset(self):
+        """Delete selected dataset from list"""
+        selection = self.processed_listbox.curselection()
+        if not selection:
+            self.status_label.config(text="No dataset selected!")
+            return
+        
+        # Get selected video name
+        video_name = self.processed_listbox.get(selection[0])
+        
+        # Confirm deletion
+        from tkinter import messagebox
+        confirm = messagebox.askyesno(
+            "Delete Dataset",
+            f"Delete all files for:\n{video_name}\n\nThis will remove all person videos and JSON files."
+        )
+        
+        if not confirm:
+            return
+        
+        # Delete files
+        deleted_count = self.dataset_manager.remove_dataset(video_name)
+        
+        # Refresh list
+        self.refresh_dataset_list()
+        
+        self.status_label.config(text=f"Deleted {deleted_count} files for {video_name}")
+    
+    def process_dataset(self):
+        """Process all selected video files"""
+        if not self.selected_files:
+            self.status_label.config(text="No files selected!")
+            return
+        
+        if self.dataset_processing:
+            self.status_label.config(text="Already processing...")
+            return
+        
+        # Disable button during processing
+        self.process_dataset_btn.config(state=tk.DISABLED)
+        self.dataset_processing = True
+        
+        # Show info overlay
+        self.info_overlay_frame.place(relx=0.5, rely=0.5, anchor=tk.CENTER, width=700, height=300)
+        
+        # Start processing in separate thread
+        threading.Thread(target=self._process_dataset_thread, daemon=True).start()
+    
+    def _process_dataset_thread(self):
+        """Process dataset in separate thread"""
+        import cv2
+        from ultralytics import YOLO
+        from object_box_lib import separate_object_gpu_tracking
+        
+        # Create output directory
+        os.makedirs('dataset', exist_ok=True)
+        
+        # Load models (always load both for dataset generation)
+        self.root.after(0, lambda: self.status_label.config(text="Loading models..."))
+        seg_model = YOLO('yolov8s-seg.pt').to('cuda')
+        pose_model = YOLO('yolov8s-pose.pt').to('cuda')
+        
+        total_files = len(self.selected_files)
+        total_persons_all = 0
+        
+        for file_idx, video_path in enumerate(self.selected_files, 1):
+            try:
+                # Update progress
+                filename = os.path.basename(video_path)
+                basename = os.path.splitext(filename)[0]
+                
+                # Check if already processed
+                if self.dataset_manager.is_processed(filename):
+                    print(f"⊘ Skipping {filename} (already processed)")
+                    self.root.after(0, lambda f=file_idx, t=total_files, n=filename: 
+                        self.dataset_current_file_label.config(text=f"Skipping {f}/{t}:\n{n} (already processed)"))
+                    continue
+                
+                self.root.after(0, lambda f=file_idx, t=total_files, n=filename: 
+                    self.dataset_current_file_label.config(text=f"Processing file {f}/{t}:\n{n}"))
+                
+                # Open video
+                cap = cv2.VideoCapture(video_path)
+                if not cap.isOpened():
+                    print(f"Failed to open: {video_path}")
+                    continue
+                
+                # Get video info
+                fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                
+                # Create recorders for each person (dict: person_id -> recorder)
+                from recorder import Recorder
+                person_recorders = {}
+                
+                frame_idx = 0
+                persons_in_video = set()
+                
+                while cap.isOpened():
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    
+                    # Process frame (always enable both pose and segmentation)
+                    output_frames = separate_object_gpu_tracking(
+                        frame,
+                        seg_model=seg_model,
+                        pose_model=pose_model,
+                        scale_factor=0.5,
+                        tracker='bytetrack.yaml',
+                        enable_segmentation=True  # Always enabled for dataset
+                    )
+                    
+                    # Record each person
+                    for person_id, data in output_frames.items():
+                        persons_in_video.add(person_id)
+                        
+                        # Create recorder if not exists
+                        if person_id not in person_recorders:
+                            # Extract person number from person_id (e.g., "Person_1" -> "01")
+                            person_num = person_id.split('_')[-1]
+                            output_name = f"{basename}_person{person_num.zfill(2)}"
+                            
+                            person_recorders[person_id] = {
+                                'recorder': Recorder(
+                                    out_dir='dataset',
+                                    fps=fps,
+                                    frame_size=(224, 224),
+                                    timeout=2.0
+                                ),
+                                'output_name': output_name
+                            }
+                        
+                        # Update recorder with custom naming
+                        recorder_info = person_recorders[person_id]
+                        recorder_info['recorder'].update(
+                            pid=recorder_info['output_name'],
+                            frame=data['image'],
+                            keypoints=data.get('keypoints')
+                        )
+                    
+                    frame_idx += 1
+                    
+                    # Update progress every 30 frames
+                    if frame_idx % 30 == 0:
+                        percent = int((frame_idx / total_frames) * 100)
+                        progress = f"Frame {frame_idx}/{total_frames} ({percent}%)"
+                        persons_found = len(persons_in_video)
+                        summary = f"Persons detected: {persons_found}"
+                        self.root.after(0, lambda p=progress, s=summary: (
+                            self.dataset_frame_progress_label.config(text=p),
+                            self.dataset_summary_label.config(text=s)
+                        ))
+                
+                # Close all recorders for this video
+                for person_id, recorder_info in person_recorders.items():
+                    recorder_info['recorder'].close_all()
+                
+                cap.release()
+                
+                # Mark as processed
+                self.dataset_manager.mark_as_processed(filename)
+                
+                total_persons_all += len(persons_in_video)
+                print(f"✓ {filename}: {len(persons_in_video)} persons, {frame_idx} frames")
+                
+            except Exception as e:
+                print(f"Error processing {video_path}: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Done
+        self.dataset_processing = False
+        self.root.after(0, lambda: self.process_dataset_btn.config(state=tk.NORMAL))
+        self.root.after(0, lambda: self.dataset_current_file_label.config(
+            text=f"✓ Processing Complete!", fg="#00ff00"))
+        self.root.after(0, lambda: self.dataset_frame_progress_label.config(
+            text=f"Processed {total_files} video file(s)"))
+        self.root.after(0, lambda: self.dataset_summary_label.config(
+            text=f"Total: {total_persons_all} persons extracted\nSaved to: dataset/", 
+            fg="#00ff00"))
+        self.root.after(0, lambda: self.status_label.config(
+            text=f"Dataset processing complete: {total_persons_all} persons extracted"))
+        
+        # Hide overlay after 3 seconds
+        self.root.after(3000, lambda: self.info_overlay_frame.place_forget())
 
 if __name__ == "__main__":
     root = tk.Tk()

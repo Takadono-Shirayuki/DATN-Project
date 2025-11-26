@@ -48,10 +48,14 @@ class CameraModule:
         # Parse input
         if input_source == '0' or input_source == 0:
             input_source = 0
-        elif isinstance(input_source, str) and input_source.lower().endswith('.mp4'):
-            pass  # Use as is
         elif isinstance(input_source, str):
-            input_source = f'http://{input_source}:4747/video'
+            # Check if it's a video file
+            video_extensions = ('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v', '.mpg', '.mpeg')
+            if input_source.lower().endswith(video_extensions):
+                pass  # Use as is
+            else:
+                # Assume it's IP address for DroidCam
+                input_source = f'http://{input_source}:4747/video'
         
         self.cap = cv2.VideoCapture(input_source)
         if not self.cap.isOpened():
