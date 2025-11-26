@@ -246,6 +246,7 @@ class CameraApp:
         mgmt_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         self.processed_listbox = tk.Listbox(mgmt_frame, height=6, font=("Segoe UI", 8),
+                                           selectmode=tk.MULTIPLE,
                                            yscrollcommand=mgmt_scrollbar.set)
         self.processed_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         mgmt_scrollbar.config(command=self.processed_listbox.yview)
@@ -256,6 +257,8 @@ class CameraApp:
         
         tk.Button(mgmt_btn_frame, text="Delete Selected", width=12, 
                  font=("Segoe UI", 9), command=self.delete_selected_dataset).pack(side=tk.LEFT, padx=2)
+        tk.Button(mgmt_btn_frame, text="Delete All", width=12, 
+                 font=("Segoe UI", 9), command=self.delete_all_datasets).pack(side=tk.LEFT, padx=2)
         tk.Button(mgmt_btn_frame, text="Refresh", width=12, 
                  font=("Segoe UI", 9), command=self.refresh_dataset_list).pack(side=tk.LEFT, padx=2)
         
@@ -639,32 +642,64 @@ class CameraApp:
         self.status_label.config(text=f"Refreshed: {len(processed)} processed videos")
     
     def delete_selected_dataset(self):
-        """Delete selected dataset from list"""
+        """Delete selected datasets from list (supports multiple selection)"""
         selection = self.processed_listbox.curselection()
         if not selection:
             self.status_label.config(text="No dataset selected!")
             return
         
-        # Get selected video name
-        video_name = self.processed_listbox.get(selection[0])
+        # Get all selected video names
+        video_names = [self.processed_listbox.get(idx) for idx in selection]
         
         # Confirm deletion
         from tkinter import messagebox
         confirm = messagebox.askyesno(
-            "Delete Dataset",
-            f"Delete all files for:\n{video_name}\n\nThis will remove all person videos and JSON files."
+            "Delete Datasets",
+            f"Delete {len(video_names)} dataset(s)?\n\nThis will remove all person videos and JSON files."
         )
         
         if not confirm:
             return
         
-        # Delete files
-        deleted_count = self.dataset_manager.remove_dataset(video_name)
+        # Delete files for each selected dataset
+        total_deleted = 0
+        for video_name in video_names:
+            deleted_count = self.dataset_manager.remove_dataset(video_name)
+            total_deleted += deleted_count
         
         # Refresh list
         self.refresh_dataset_list()
         
-        self.status_label.config(text=f"Deleted {deleted_count} files for {video_name}")
+        self.status_label.config(text=f"Deleted {total_deleted} files from {len(video_names)} dataset(s)")
+    
+    def delete_all_datasets(self):
+        """Delete all datasets from list"""
+        processed_videos = self.dataset_manager.processed_videos
+        
+        if not processed_videos:
+            self.status_label.config(text="No datasets to delete!")
+            return
+        
+        # Confirm deletion
+        from tkinter import messagebox
+        confirm = messagebox.askyesno(
+            "Delete All Datasets",
+            f"Delete ALL {len(processed_videos)} datasets?\n\nThis will remove all processed videos and JSON files.\n\nThis action cannot be undone!"
+        )
+        
+        if not confirm:
+            return
+        
+        # Delete all datasets
+        total_deleted = 0
+        for video_name in processed_videos:
+            deleted_count = self.dataset_manager.remove_dataset(video_name)
+            total_deleted += deleted_count
+        
+        # Refresh list
+        self.refresh_dataset_list()
+        
+        self.status_label.config(text=f"Deleted all datasets ({total_deleted} files removed)")
     
     def process_dataset(self):
         """Process all selected video files"""
