@@ -801,7 +801,8 @@ class CameraApp:
                                     out_dir='dataset',
                                     fps=fps,
                                     frame_size=(224, 224),
-                                    timeout=2.0
+                                    timeout=2.0,
+                                    min_duration=2.0  # Filter out videos < 2 seconds
                                 ),
                                 'output_name': output_name
                             }

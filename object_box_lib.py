@@ -140,11 +140,14 @@ def batch_crop_and_resize_gpu_tracking(frame, detections, seg_results, pose_resu
             union_area = box1_area + box2_area - inter_area
             
             iou = inter_area / (union_area + 1e-7)
-            best_idx = torch.argmax(iou).item()
-            best_iou = iou[best_idx].item()
             
-            if best_iou > 0.3:
-                pose_matches[det_idx] = best_idx
+            # Check if iou tensor is not empty before argmax
+            if iou.numel() > 0:
+                best_idx = torch.argmax(iou).item()
+                best_iou = iou[best_idx].item()
+                
+                if best_iou > 0.3:
+                    pose_matches[det_idx] = best_idx
     
     # Process each detection
     for det_idx, det in enumerate(detections):
