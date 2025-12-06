@@ -8,9 +8,16 @@ import glob
 
 class DatasetManager:
     def __init__(self, config_file='dataset_config.json', output_dir='dataset'):
-        self.config_file = config_file
         self.output_dir = output_dir
+        # Store config file in the same directory as output
+        self.config_file = os.path.join(output_dir, 'dataset_config.json')
         self.processed_videos = set()
+        self.load_config()
+    
+    def set_output_dir(self, output_dir):
+        """Change output directory and reload config from new location"""
+        self.output_dir = output_dir
+        self.config_file = os.path.join(output_dir, 'dataset_config.json')
         self.load_config()
     
     def load_config(self):
@@ -29,6 +36,8 @@ class DatasetManager:
     def save_config(self):
         """Save processed videos list to config file"""
         try:
+            # Ensure output directory exists
+            os.makedirs(self.output_dir, exist_ok=True)
             with open(self.config_file, 'w') as f:
                 json.dump({
                     'processed_videos': list(self.processed_videos)

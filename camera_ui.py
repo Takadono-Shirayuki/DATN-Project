@@ -5,9 +5,9 @@ import tkinter as tk
 import threading
 import cv2
 from PIL import Image, ImageTk
-from camera_module import CameraModule
-from object_box_module import ObjectBoxModule
-from dataset_manager import DatasetManager
+from camera_tab.camera_module import CameraModule
+from object_box_tab.object_box_module import ObjectBoxModule
+from dataset_tab.dataset_manager import DatasetManager
 import os
 
 class CameraApp:
@@ -18,6 +18,7 @@ class CameraApp:
         
         # Variables
         self.webcam_ip = tk.StringVar()
+        self.dataset_path = tk.StringVar()  # Custom dataset path
         self.loaded = False
         self.running = False
         self.current_tab = 0  # 0: Camera, 1: Object Box, 2: Recorder, 3: Dataset
@@ -66,7 +67,7 @@ class CameraApp:
                                           command=lambda: self.switch_tab(3))
         self.dataset_tab_btn.pack(side=tk.LEFT, padx=2)
         
-        # Webcam input (for Camera tab)
+        # Webcam input (for Camera and Object Box tabs)
         self.webcam_frame = tk.Frame(top_frame)
         self.webcam_frame.pack(side=tk.LEFT, padx=20)
         
@@ -81,6 +82,15 @@ class CameraApp:
         self.stop_btn = tk.Button(self.webcam_frame, text="Stop", command=self.stop_camera, 
                                    width=8, font=("Segoe UI", 11), state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT, padx=2)
+        
+        # Dataset output path (for Dataset tab)
+        self.dataset_path_frame = tk.Frame(top_frame)
+        
+        tk.Label(self.dataset_path_frame, text="Output Path:", font=("Segoe UI", 11)).pack(side=tk.LEFT, padx=5)
+        dataset_path_entry = tk.Entry(self.dataset_path_frame, textvariable=self.dataset_path, width=40, font=("Segoe UI", 11))
+        dataset_path_entry.pack(side=tk.LEFT, padx=5)
+        tk.Label(self.dataset_path_frame, text="(default: person_videos)", 
+                font=("Segoe UI", 9), fg="gray").pack(side=tk.LEFT, padx=2)
         
         # Main container
         main_frame = tk.Frame(root)
@@ -332,8 +342,9 @@ class CameraApp:
             self.camera_tab_btn.config(font=("Segoe UI", 12, "bold"), relief=tk.SUNKEN)
             self.left_panel_camera.pack(fill=tk.BOTH, expand=True)
             
-            # Show webcam controls
+            # Show webcam controls, hide dataset path
             self.webcam_frame.pack(side=tk.LEFT, padx=20)
+            self.dataset_path_frame.pack_forget()
             
             self.status_label.config(text="Camera tab selected")
             
@@ -341,8 +352,9 @@ class CameraApp:
             self.objectbox_tab_btn.config(font=("Segoe UI", 12, "bold"), relief=tk.SUNKEN)
             self.left_panel_objectbox.pack(fill=tk.BOTH, expand=True)
             
-            # Show webcam controls
+            # Show webcam controls, hide dataset path
             self.webcam_frame.pack(side=tk.LEFT, padx=20)
+            self.dataset_path_frame.pack_forget()
             
             self.status_label.config(text="Object Box tab selected")
             
@@ -350,8 +362,9 @@ class CameraApp:
             self.recorder_tab_btn.config(font=("Segoe UI", 12, "bold"), relief=tk.SUNKEN)
             self.left_panel_recorder.pack(fill=tk.BOTH, expand=True)
             
-            # Hide webcam controls
+            # Hide both webcam and dataset path controls
             self.webcam_frame.pack_forget()
+            self.dataset_path_frame.pack_forget()
             
             self.status_label.config(text="Recorder tab selected")
             
@@ -362,8 +375,9 @@ class CameraApp:
             self.dataset_tab_btn.config(font=("Segoe UI", 12, "bold"), relief=tk.SUNKEN)
             self.left_panel_dataset.pack(fill=tk.BOTH, expand=True)
             
-            # Hide webcam controls
+            # Hide webcam controls, show dataset path
             self.webcam_frame.pack_forget()
+            self.dataset_path_frame.pack(side=tk.LEFT, padx=20)
             
             # Show info overlay if processing
             if self.dataset_processing:
@@ -711,6 +725,12 @@ class CameraApp:
             self.status_label.config(text="Already processing...")
             return
         
+        # Get output directory (default to 'person_videos' if empty)
+        output_dir = self.dataset_path.get().strip() or 'person_videos'
+        
+        # Update dataset manager with new output directory
+        self.dataset_manager.set_output_dir(output_dir)
+        
         # Disable button during processing
         self.process_dataset_btn.config(state=tk.DISABLED)
         self.dataset_processing = True
@@ -725,10 +745,13 @@ class CameraApp:
         """Process dataset in separate thread"""
         import cv2
         from ultralytics import YOLO
-        from object_box_lib import separate_object_gpu_tracking
+        from object_box_tab.object_box_lib import separate_object_gpu_tracking
+        
+        # Get output directory from dataset manager
+        output_dir = self.dataset_manager.output_dir
         
         # Create output directory
-        os.makedirs('dataset', exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
         
         # Load models (always load both for dataset generation)
         self.root.after(0, lambda: self.status_label.config(text="Loading models..."))
@@ -765,7 +788,7 @@ class CameraApp:
                 total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                 
                 # Create recorders for each person (dict: person_id -> recorder)
-                from recorder import Recorder
+                from recorder_tab.recorder import Recorder
                 person_recorders = {}
                 
                 frame_idx = 0
@@ -796,9 +819,10 @@ class CameraApp:
                             person_num = person_id.split('_')[-1]
                             output_name = f"{basename}_person{person_num.zfill(2)}"
                             
+                            from recorder_tab.recorder import Recorder
                             person_recorders[person_id] = {
                                 'recorder': Recorder(
-                                    out_dir='dataset',
+                                    out_dir=output_dir,
                                     fps=fps,
                                     frame_size=(224, 224),
                                     timeout=2.0,
@@ -852,8 +876,9 @@ class CameraApp:
             text=f"✓ Processing Complete!", fg="#00ff00"))
         self.root.after(0, lambda: self.dataset_frame_progress_label.config(
             text=f"Processed {total_files} video file(s)"))
-        self.root.after(0, lambda: self.dataset_summary_label.config(
-            text=f"Total: {total_persons_all} persons extracted\nSaved to: dataset/", 
+        output_dir = self.dataset_manager.output_dir
+        self.root.after(0, lambda d=output_dir: self.dataset_summary_label.config(
+            text=f"Total: {total_persons_all} persons extracted\nSaved to: {d}/", 
             fg="#00ff00"))
         self.root.after(0, lambda: self.status_label.config(
             text=f"Dataset processing complete: {total_persons_all} persons extracted"))

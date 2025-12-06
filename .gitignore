@@ -1,3 +1,5 @@
 /person_videos
 /__pycache__
 raw dataset/
+/dataset
+/dataset_action_split
