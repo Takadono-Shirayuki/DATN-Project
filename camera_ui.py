@@ -114,6 +114,7 @@ class CameraApp:
         self.bbox_var = tk.BooleanVar()
         self.pose_var = tk.BooleanVar()
         self.seg_var = tk.BooleanVar()
+        self.action_var = tk.BooleanVar(value=True)  # Default enabled
         
         tk.Checkbutton(self.left_panel_camera, text="Hộp giới hạn", variable=self.bbox_var,
                       font=("Segoe UI", 12), command=self.on_checkbox_change).pack(anchor=tk.W, padx=15, pady=5)
@@ -121,6 +122,8 @@ class CameraApp:
                       font=("Segoe UI", 12), command=self.on_checkbox_change).pack(anchor=tk.W, padx=15, pady=5)
         tk.Checkbutton(self.left_panel_camera, text="Phân đoạn ảnh", variable=self.seg_var,
                       font=("Segoe UI", 12), command=self.on_checkbox_change).pack(anchor=tk.W, padx=15, pady=5)
+        tk.Checkbutton(self.left_panel_camera, text="✨ Nhận diện hành động", variable=self.action_var,
+                      font=("Segoe UI", 12), command=self.on_checkbox_change, fg="#0066cc").pack(anchor=tk.W, padx=15, pady=5)
         
         # Spacer
         tk.Frame(self.left_panel_camera, height=20).pack()
@@ -448,7 +451,8 @@ class CameraApp:
             self.camera_module.set_options(
                 bbox=self.bbox_var.get(),
                 pose=self.pose_var.get(),
-                segmentation=self.seg_var.get()
+                segmentation=self.seg_var.get(),
+                action_recognition=self.action_var.get()
             )
         elif self.current_tab == 1:  # Object Box mode
             success = self.objectbox_module.start(input_source)
@@ -606,7 +610,8 @@ class CameraApp:
             self.camera_module.set_options(
                 bbox=self.bbox_var.get(),
                 pose=self.pose_var.get(),
-                segmentation=self.seg_var.get()
+                segmentation=self.seg_var.get(),
+                action_recognition=self.action_var.get()
             )
         elif self.current_tab == 1:  # Object Box mode
             self.objectbox_module.set_options(
