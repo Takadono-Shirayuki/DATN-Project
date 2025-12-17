@@ -1,3 +1,4 @@
 /person_videos
-/__pycache__
+__pycache__
 raw dataset/
+dataset/
