@@ -102,28 +102,50 @@ def batch_crop_and_resize_gpu_tracking(frame, detections, seg_results, pose_resu
     if len(detections) == 0:
         return {}
     
-    # Convert frame to tensor on GPU (C, H, W) format
-    frame_tensor = torch.from_numpy(frame).permute(2, 0, 1).float().cuda()
+    # Detect device from model results or fallback to device check (CUDA > MPS > CPU)
+    device = None
+    
+    # Try to get device from model results first
+    if seg_results is not None and seg_results[0].masks is not None:
+        masks_data = seg_results[0].masks.data
+        if masks_data is not None and len(masks_data) > 0:
+            device = masks_data.device
+    elif pose_results is not None and pose_results[0].keypoints is not None:
+        kp_data = pose_results[0].keypoints.data
+        if kp_data is not None and len(kp_data) > 0:
+            device = kp_data.device
+    
+    # Fallback to device detection if not found from models
+    if device is None:
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            device = torch.device("mps")  # Apple Metal Performance Shaders for Mac
+        else:
+            device = torch.device("cpu")
+    
+    # Convert frame to tensor on detected device (C, H, W) format
+    frame_tensor = torch.from_numpy(frame).permute(2, 0, 1).float().to(device)
     
     output_frames = {}
     
     # Extract masks from seg_results (already has tracking)
     masks_data = None
     if seg_results is not None and seg_results[0].masks is not None:
-        masks_data = seg_results[0].masks.data  # Already on GPU
+        masks_data = seg_results[0].masks.data  # Already on correct device
     
     # Extract pose data
     pose_keypoints_data = None
     pose_boxes_data = None
     if pose_results is not None and pose_results[0].keypoints is not None:
-        pose_keypoints_data = pose_results[0].keypoints.data  # Already on GPU
-        pose_boxes_data = pose_results[0].boxes.xyxy  # Already on GPU
+        pose_keypoints_data = pose_results[0].keypoints.data  # Already on correct device
+        pose_boxes_data = pose_results[0].boxes.xyxy  # Already on correct device
     
     # IoU matching for pose (seg already matched via track_id)
     pose_matches = {}
     
     if pose_keypoints_data is not None and pose_boxes_data is not None:
-        det_boxes = torch.tensor([[d[0], d[1], d[2], d[3]] for d in detections], device='cuda')
+        det_boxes = torch.tensor([[d[0], d[1], d[2], d[3]] for d in detections], device=device)
         
         # Vectorized IoU computation
         for det_idx in range(len(detections)):

@@ -1,78 +1,100 @@
 import numpy as np
+import json
+import os
 from scipy.spatial.distance import cdist
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
 
 class OpenSetGaitMatcher:
-    def __init__(self, metric='cosine', alpha=3.0):
-        """
-        Args:
-            metric: 'cosine' hoặc 'euclidean'
-            alpha: Hệ số nhân độ lệch chuẩn (thường là 3.0 để phủ 99.7% phân phối Gauss)
-        """
+    def __init__(self, metric='cosine', alpha=3.0, filename="database.json"):
         self.metric = metric
         self.alpha = alpha
-        self.centroids = None      # Ma trận lưu các vector tâm của từng người
-        self.labels = None         # Danh sách ID tương ứng với các tâm
-        self.threshold = None      # Bán kính 'hình cầu' an toàn chung
+        self.filename = filename
 
-    def fit(self, X, y):
+    def calculate_optimal_prototypes(self, user_id, X):
         """
-        Giai đoạn 'Huấn luyện' Open-set: Tìm Tâm và xác định Bán kính hình cầu.
+        Luồng Đăng ký: Tự động tìm K tối ưu và cập nhật JSON tức thì.
+        X: Toàn bộ Embedding Vectors của một người dùng (ví dụ 1000 mẫu).
         """
-        unique_labels = np.unique(y)
-        centroids_list = []
-        all_intra_distances = []
+        # --- BƯỚC 5: TÌM K TỐI ƯU (Từ 2 đến 5) ---
+        best_k = 1
+        if len(X) > 5: # Chỉ chia cụm nếu có đủ dữ liệu
+            max_silhouette = -1
+            # Thử nghiệm K để tìm độ khít cao nhất
+            for k in range(2, 6):
+                if len(X) <= k: break
+                kmeans = KMeans(n_clusters=k, n_init=10, random_state=42)
+                labels = kmeans.fit_predict(X)
+                score = silhouette_score(X, labels)
+                if score > max_silhouette:
+                    max_silhouette = score
+                    best_k = k
 
-        # 1. Tạo Tâm (Centroids) cho từng ID người dùng
-        for label in unique_labels:
-            class_samples = X[y == label]
-            # Tâm là trung bình cộng (Mean) của tất cả các vector của cùng một người
-            center = np.mean(class_samples, axis=0)
-            centroids_list.append(center)
-            
-            # 2. Tính khoảng cách từ mỗi mẫu đến Tâm của chính nó
-            # Khoảng cách này đại diện cho sự biến thiên dáng đi của người đó
-            dists_to_center = cdist(class_samples, center.reshape(1, -1), metric=self.metric)
-            all_intra_distances.extend(dists_to_center.flatten())
+        # --- CHẠY K-MEANS VỚI K TỐI ƯU ---
+        final_kmeans = KMeans(n_clusters=best_k, n_init=10, random_state=42)
+        final_labels = final_kmeans.fit_predict(X)
+        centroids = final_kmeans.cluster_centers_
 
-        self.centroids = np.array(centroids_list)
-        self.labels = unique_labels
+        prototypes = []
+        for i in range(best_k):
+            # Lấy các mẫu thuộc về cụm i
+            cluster_samples = X[final_labels == i]
+            center = centroids[i]
 
-        # 3. Tính ngưỡng Threshold (Bán kính hình cầu Gaussian)
-        # Threshold = Mean_dist + Alpha * Std_dist
-        mu = np.mean(all_intra_distances)
-        sigma = np.std(all_intra_distances)
-        self.threshold = mu + self.alpha * sigma
+            # --- BƯỚC 6: TÍNH NGƯỠNG RIÊNG CHO CỤM (3-SIGMA) ---
+            dists = cdist(cluster_samples, center.reshape(1, -1), metric=self.metric).flatten()
+            mu = np.mean(dists)
+            sigma = np.std(dists) if len(dists) > 1 else 0
+            threshold = mu + self.alpha * sigma
+
+            prototypes.append({
+                "prototype_id": i,
+                "centroid": center.tolist(),
+                "threshold": float(threshold)
+            })
+
+        # --- BƯỚC 7: CẬP NHẬT JSON TỨC THÌ ---
+        data = {}
+        if os.path.exists(self.filename):
+            with open(self.filename, 'r', encoding='utf-8') as f:
+                try: data = json.load(f)
+                except: data = {}
+
+        # Cập nhật hoặc tạo mới profile cho user_id
+        data[user_id] = prototypes
+
+        with open(self.filename, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
         
-        print(f"✅ Hệ thống đã tạo {len(unique_labels)} tâm (Centroids).")
-        print(f"✨ Bán kính hình cầu an toàn (Threshold): {self.threshold:.4f}")
+        print(f"✅ Đã lưu {best_k} Prototypes tối ưu cho User '{user_id}' vào {self.filename}")
 
-    def predict(self, query_X):
+    def predict(self, probe_vector):
         """
-        So khớp dựa trên khoảng cách đến Tâm.
-        Returns:
-            results: ID người dùng hoặc -1 nếu nằm ngoài mọi hình cầu (Unknown)
-            min_dists: Khoảng cách nhỏ nhất tìm được
+        Luồng Xác thực: So khớp Probe với toàn bộ Prototypes của mọi User.
         """
-        if self.centroids is None:
-            raise ValueError("Bạn cần gọi hàm fit() trước khi predict.")
+        if not os.path.exists(self.filename):
+            return {"user_id": "Unknown", "is_known": False}
 
-        # 1. Tính khoảng cách từ Query tới tất cả các Tâm (Centroids)
-        # Thay vì so với hàng ngàn mẫu, ta chỉ so với danh sách các Tâm
-        dists_to_centroids = cdist(query_X, self.centroids, metric=self.metric)
-        
-        min_dists = np.min(dists_to_centroids, axis=1)
-        min_indices = np.argmin(dists_to_centroids, axis=1)
+        with open(self.filename, 'r', encoding='utf-8') as f:
+            database = json.load(f)
 
-        results = []
-        for i, d in enumerate(min_dists):
-            # Nếu khoảng cách đến tâm gần nhất vẫn lớn hơn bán kính cho phép
-            if d > self.threshold:
-                results.append(-1) # Unknown (Nằm ngoài vùng an toàn)
-            else:
-                results.append(self.labels[min_indices[i]]) # Nhận diện đúng ID
+        best_match = {"user_id": "Unknown", "distance": float('inf'), "is_known": False}
 
-        return np.array(results), min_dists
+        for user_id, protos in database.items():
+            for proto in protos:
+                centroid = np.array(proto['centroid'])
+                dist = cdist(probe_vector.reshape(1, -1), centroid.reshape(1, -1), metric=self.metric)[0][0]
+                
+                if dist < best_match["distance"]:
+                    best_match.update({
+                        "user_id": user_id,
+                        "distance": dist,
+                        "threshold": proto['threshold']
+                    })
 
-    def evaluate(self, y_true, y_pred):
-        """Tính toán độ chính xác (Accuracy)"""
-        return np.mean(y_true == y_pred)
+        if best_match["distance"] <= best_match.get("threshold", 0):
+            best_match["is_known"] = True
+        else:
+            best_match["user_id"] = "Unknown"
+
+        return best_match

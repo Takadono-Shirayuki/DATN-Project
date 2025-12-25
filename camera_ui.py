@@ -758,10 +758,19 @@ class CameraApp:
         # Create output directory
         os.makedirs(output_dir, exist_ok=True)
         
+        # Determine device (CUDA > MPS > CPU)
+        import torch
+        if torch.cuda.is_available():
+            device = 'cuda'
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            device = 'mps'  # Apple Metal Performance Shaders for Mac
+        else:
+            device = 'cpu'
+        
         # Load models (always load both for dataset generation)
-        self.root.after(0, lambda: self.status_label.config(text="Loading models..."))
-        seg_model = YOLO('yolov8s-seg.pt').to('cuda')
-        pose_model = YOLO('yolov8s-pose.pt').to('cuda')
+        self.root.after(0, lambda: self.status_label.config(text=f"Loading models on {device}..."))
+        seg_model = YOLO('yolov8s-seg.pt').to(device)
+        pose_model = YOLO('yolov8s-pose.pt').to(device)
         
         total_files = len(self.selected_files)
         total_persons_all = 0
