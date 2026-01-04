@@ -206,10 +206,12 @@ def batch_crop_and_resize_gpu_tracking(frame, detections, seg_results, pose_resu
         
         # Get keypoints (match with pose via IoU)
         keypoints = None
+        orig_keypoints = None
         if det_idx in pose_matches:
             pose_idx = pose_matches[det_idx]
             kp = pose_keypoints_data[pose_idx].cpu().numpy()
-            keypoints = [[float(x), float(y), float(c)] for x, y, c in kp.tolist()]
+            orig_keypoints = [[float(x), float(y), float(c)] for x, y, c in kp.tolist()]
+            keypoints = orig_keypoints
         
         # Crop and resize on GPU
         cropped_tensor, transformed_kp = crop_and_resize_gpu(
@@ -225,7 +227,9 @@ def batch_crop_and_resize_gpu_tracking(frame, detections, seg_results, pose_resu
         output_frames[person_id] = {
             'image': cropped_img,
             'label': person_id,
-            'keypoints': transformed_kp
+            'keypoints': transformed_kp,
+            'orig_keypoints': orig_keypoints,
+            'bbox': [x1, y1, x2, y2]
         }
     
     return output_frames

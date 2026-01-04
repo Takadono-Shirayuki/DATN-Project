@@ -170,21 +170,35 @@ class CameraModule:
                     item = self.action_queue.get(timeout=0.1)
                     if item is None:  # Poison pill
                         break
-                    
+
                     track_id, keypoints, bbox = item
                     
                     # Update sequence buffer with bbox for coordinate transformation
-                    self.action_recognizer.update(track_id, keypoints, bbox)
-                    
+                    try:
+                        self.action_recognizer.update(track_id, keypoints, bbox)
+                    except Exception as e:
+                        print(f"❌ ActionRecognizer.update error for {track_id}: {e}")
+                        raise
+
                     # Get prediction
-                    result = self.action_recognizer.predict(track_id, use_smoothing=True)
-                    
-                    # Store result
-                    if result['ready']:
-                        self.action_results[track_id] = {
-                            'action': result['action'],
-                            'confidence': result['confidence']
-                        }
+                    try:
+                        result = self.action_recognizer.predict(track_id, use_smoothing=True)
+                    except Exception as e:
+                        print(f"❌ ActionRecognizer.predict error for {track_id}: {e}")
+                        raise
+
+                    # Store result and debug-log
+                    try:
+                        if isinstance(result, dict):
+                            if result.get('ready'):
+                                self.action_results[track_id] = {
+                                    'action': result.get('action'),
+                                    'confidence': result.get('confidence')
+                                }
+                        else:
+                            pass
+                    except Exception:
+                        pass
                 except queue.Empty:
                     continue
                 except Exception as e:
