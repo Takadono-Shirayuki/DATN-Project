@@ -34,6 +34,7 @@ def make_gei_from_frames(frames: List[np.ndarray], size=(224, 224)) -> np.ndarra
     gei = np.clip(gei, 0.0, 1.0).astype(np.float32)
     return gei
 
+
 def process_video_to_gei(video_path: str, output_dir: str, frames_per_gei: int = 30,
                          size=(224, 224), overwrite: bool = False, return_paths: bool = True):
     """
