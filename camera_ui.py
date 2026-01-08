@@ -31,6 +31,7 @@ class CameraApp:
         self.update_thread = None
         self.labeling_video_playing = False  # Flag to control video playback
         self.current_labeling_video = None  # Track current video file
+        self.selected_labeling_file = None  # Track selected file for labeling
         
         # Gait labels storage
         self.gait_labels_file = 'gait/gait_labels.json'
@@ -369,6 +370,11 @@ class CameraApp:
         # Label assignment
         tk.Label(self.left_panel_labeling, text="Assign Label:", 
                 font=("Segoe UI", 10, "bold")).pack(pady=(15,5), anchor=tk.W, padx=10)
+        
+        # Current label status
+        self.current_label_status = tk.Label(self.left_panel_labeling, text="", 
+                                            font=("Segoe UI", 8), fg="gray", wraplength=280)
+        self.current_label_status.pack(pady=(0,5), padx=10, anchor=tk.W)
         
         label_frame = tk.Frame(self.left_panel_labeling)
         label_frame.pack(padx=10, pady=5, fill=tk.X)
@@ -1406,9 +1412,17 @@ class CameraApp:
         if os.path.exists(out_dir):
             # Only show non-_orig files
             files = [f for f in os.listdir(out_dir) if f.endswith('.mp4') and '_orig' not in f]
+            labeled_count = 0
             for f in sorted(files):
-                self.labeling_file_listbox.insert(tk.END, f)
-            self.labeling_status_label.config(text=f"Total: {len(files)} files")
+                # Add label info if exists
+                label = self.gait_labels.get(f, "")
+                if label:
+                    display_text = f"{f} → [{label}]"
+                    labeled_count += 1
+                else:
+                    display_text = f"{f} [chưa gán nhãn]"
+                self.labeling_file_listbox.insert(tk.END, display_text)
+            self.labeling_status_label.config(text=f"Total: {len(files)} files ({labeled_count} đã gán nhãn)")
     
     def on_labeling_file_selected(self, event):
         """Handle file selection in labeling tab"""
@@ -1416,13 +1430,35 @@ class CameraApp:
         if not selection:
             return
         
-        filename = self.labeling_file_listbox.get(selection[0])
+        display_text = self.labeling_file_listbox.get(selection[0])
+        # Extract filename from display text (remove label part)
+        if ' → [' in display_text:
+            filename = display_text.split(' → [')[0]
+        elif ' [chưa gán nhãn]' in display_text:
+            filename = display_text.replace(' [chưa gán nhãn]', '')
+        else:
+            filename = display_text
+        
+        # Lưu filename vào biến instance
+        self.selected_labeling_file = filename
         self.current_file_label.config(text=f"Selected: {filename}")
         
         # Load label from JSON if available
         current_label = self.gait_labels.get(filename, "")
         self.label_entry.delete(0, tk.END)
         self.label_entry.insert(0, current_label)
+        
+        # Update status label
+        if current_label:
+            self.current_label_status.config(
+                text=f"✓ Nhãn hiện tại: '{current_label}' (Có thể chỉnh sửa)",
+                fg="#008800"
+            )
+        else:
+            self.current_label_status.config(
+                text="✗ Chưa có nhãn - Nhập nhãn mới",
+                fg="#cc6600"
+            )
         
         # Stop current video if playing
         self.labeling_video_playing = False
@@ -1486,22 +1522,54 @@ class CameraApp:
     
     def save_label(self):
         """Save label for selected file"""
-        selection = self.labeling_file_listbox.curselection()
-        if not selection:
-            self.status_label.config(text="No file selected")
+        # Sử dụng biến instance thay vì curselection()
+        if not self.selected_labeling_file:
+            self.status_label.config(text="Không có file nào được chọn")
             return
         
-        filename = self.labeling_file_listbox.get(selection[0])
+        filename = self.selected_labeling_file
         new_label = self.label_entry.get().strip()
         
-        if not new_label:
-            self.status_label.config(text="Label cannot be empty")
-            return
+        # Allow empty label (to clear/remove label)
+        # if not new_label:
+        #     self.status_label.config(text="Nhãn không được để trống")
+        #     return
+        
+        # Check if label is being updated
+        old_label = self.gait_labels.get(filename, "")
+        is_update = bool(old_label)
         
         # Save label to JSON
         self.gait_labels[filename] = new_label
         self._save_gait_labels()
-        self.status_label.config(text=f"Label '{new_label}' saved for {filename}")
+        
+        # Update status message
+        if is_update:
+            if old_label == new_label:
+                self.status_label.config(text=f"✓ Nhãn '{new_label}' đã được xác nhận")
+            else:
+                self.status_label.config(text=f"✓ Đã cập nhật nhãn: '{old_label}' → '{new_label}'")
+                self.current_label_status.config(
+                    text=f"✓ Nhãn hiện tại: '{new_label}' (Có thể chỉnh sửa)",
+                    fg="#008800"
+                )
+        else:
+            self.status_label.config(text=f"✓ Đã lưu nhãn '{new_label}' cho {filename}")
+            self.current_label_status.config(
+                text=f"✓ Nhãn hiện tại: '{new_label}' (Có thể chỉnh sửa)",
+                fg="#008800"
+            )
+        
+        # Refresh list to show updated label
+        self.refresh_labeling_list()
+        
+        # Restore selection by finding the file
+        for i in range(self.labeling_file_listbox.size()):
+            display_text = self.labeling_file_listbox.get(i)
+            if filename in display_text:
+                self.labeling_file_listbox.selection_set(i)
+                self.labeling_file_listbox.see(i)
+                break
     
     def generate_gei_all(self):
         """Generate GEI for all labeled files with smart checking (new/changed/unchanged)"""

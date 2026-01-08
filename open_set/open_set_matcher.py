@@ -72,13 +72,16 @@ class OpenSetGaitMatcher:
     def fit(self, X, y):
         """
         Compute prototypes for each label from arrays X,y and save to DB.
+        y can be integers or strings (label names).
         """
         X = np.asarray(X)
         y = np.asarray(y)
         unique_labels = np.unique(y)
         for lbl in unique_labels:
             X_user = X[y == lbl]
-            self.calculate_optimal_prototypes(int(lbl), X_user)
+            # Giữ nguyên label (string hoặc int) thay vì convert sang int
+            user_id = str(lbl)
+            self.calculate_optimal_prototypes(user_id, X_user)
 
     def _mahalanobis_dist(self, x, centroid, cov_diag):
         arr = (x - centroid)**2
@@ -151,14 +154,16 @@ class OpenSetGaitMatcher:
         X: np.ndarray shape (n_samples, dim)
         y: array-like labels (n_samples,)
         This will compute prototypes per label and save to self.filename.
+        y can be integers or strings (label names).
         """
         X = np.asarray(X)
         y = np.asarray(y)
         unique_labels = np.unique(y)
         for lbl in unique_labels:
             X_user = X[y == lbl]
-            # store label as integer (JSON will convert keys to strings)
-            self.calculate_optimal_prototypes(int(lbl), X_user)
+            # Giữ nguyên label (string hoặc int) thay vì convert sang int
+            user_id = str(lbl)
+            self.calculate_optimal_prototypes(user_id, X_user)
 
     def calibrate_thresholds(self, val_X, val_y=None, percentile=None):
         """

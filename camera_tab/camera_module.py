@@ -8,6 +8,7 @@ import numpy as np
 from ultralytics import YOLO
 from camera_tab.camera_lib import segmentation
 from utils import YOLOPersonDetector
+from utils.text_utils import put_text_with_background
 import logging
 import os
 import sys
@@ -20,6 +21,13 @@ try:
 except ImportError:
     ACTION_CLASSIFIER_AVAILABLE = False
     print("⚠️ ActionRecognizer not available. Action recognition disabled.")
+
+try:
+    from gait_recognizer_module import GaitRecognizer
+    GAIT_RECOGNIZER_AVAILABLE = True
+except ImportError:
+    GAIT_RECOGNIZER_AVAILABLE = False
+    print("⚠️ GaitRecognizer not available. Gait recognition disabled.")
 
 class CameraModule:
     def __init__(self):
@@ -48,6 +56,11 @@ class CameraModule:
         self.action_thread = None
         self.action_queue = queue.Queue(maxsize=100)  # Queue for async inference
         self.action_thread_running = False
+        
+        # Gait recognition
+        self.gait_recognizer = None
+        self.enable_gait_recognition = True  # Bật mặc định
+        self.gait_labels = {}  # {track_id: 'Person Name'}
         
         # Suppress YOLO logs
         logging.getLogger('ultralytics').setLevel(logging.ERROR)
@@ -134,6 +147,21 @@ class CameraModule:
             self.action_thread_running = True
             self.action_thread = threading.Thread(target=self._action_inference_loop, daemon=True)
             self.action_thread.start()
+        
+        # Load gait recognizer if available
+        if GAIT_RECOGNIZER_AVAILABLE and self.gait_recognizer is None and self.enable_gait_recognition:
+            try:
+                self.gait_recognizer = GaitRecognizer(
+                    model_path='open_set/encoder_resnet.pth',
+                    database_path='database.json',  # OpenSetGaitMatcher format
+                    buffer_size=30,  # 30 frames
+                    cooldown_frames=60  # 2 seconds cooldown
+                )
+                self.gait_labels.clear()
+                print("✅ Gait recognizer loaded with OpenSetGaitMatcher")
+            except Exception as e:
+                print(f"⚠️ Could not load gait recognizer: {e}")
+                self.enable_gait_recognition = False
         
         self.running = True
         self.thread = threading.Thread(target=self._capture_loop, daemon=True)
@@ -233,6 +261,11 @@ class CameraModule:
         """Process a single frame based on enabled features"""
         output_frame = frame.copy()
         
+        # Run segmentation model để có masks cho gait recognition
+        seg_results = None
+        if self.enable_gait_recognition and self.gait_recognizer and self.seg_model:
+            seg_results = self.seg_model.track(source=frame, persist=True, save=False, conf=0.5, verbose=False, classes=[0])
+        
         if self.enable_segmentation:
             output_frame = segmentation(frame, output_frame, self.seg_model, type='Foreground')
         
@@ -243,7 +276,7 @@ class CameraModule:
             if pose_results[0].boxes is not None and len(pose_results[0].boxes) > 0:
                 active_track_ids = []
                 
-                for box, kp in zip(pose_results[0].boxes, pose_results[0].keypoints.data):
+                for box_idx, (box, kp) in enumerate(zip(pose_results[0].boxes, pose_results[0].keypoints.data)):
                     keypoints = [[round(x, 2), round(y, 2), round(c, 2)] for x, y, c in kp.tolist()]
                     x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                     bbox = [x1, y1, x2, y2]
@@ -260,8 +293,38 @@ class CameraModule:
                         except queue.Full:
                             pass  # Skip if queue full
                     
-                    # Determine label (with action if available)
-                    base_label = self.custom_ids.get(track_id, f"Person_{track_id}" if track_id else "Person")
+                    # Gait recognition: update when person is walking
+                    gait_label = None
+                    is_walking = False
+                    if self.enable_gait_recognition and self.gait_recognizer and track_id:
+                        # Check if person is walking
+                        if track_id in self.action_results:
+                            action_info = self.action_results[track_id]
+                            is_walking = action_info['action'] == 'Walking'
+                        
+                        # Extract person mask/silhouette for GEI từ seg_results
+                        person_mask = self._extract_person_mask_from_segresults(frame, bbox, box_idx, seg_results)
+                        
+                        # Update gait recognizer with mask
+                        recognized_name = self.gait_recognizer.update(
+                            person_id=f"Person_{track_id}",
+                            frame=None,  # Không dùng frame gốc nữa
+                            is_walking=is_walking,
+                            mask=person_mask,
+                            keypoints=keypoints
+                        )
+                        
+                        if recognized_name:
+                            self.gait_labels[track_id] = recognized_name
+                            gait_label = recognized_name
+                        elif track_id in self.gait_labels:
+                            gait_label = self.gait_labels[track_id]
+                    
+                    # Determine label (priority: gait > custom > track_id)
+                    if gait_label:
+                        base_label = gait_label
+                    else:
+                        base_label = self.custom_ids.get(track_id, f"Person_{track_id}" if track_id else "Person")
                     
                     # Add action to label if available
                     if track_id and track_id in self.action_results:
@@ -275,11 +338,18 @@ class CameraModule:
                     # Draw bbox if enabled
                     if self.enable_bbox:
                         cv2.rectangle(output_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                        cv2.putText(output_frame, action_label, (x1, y1 - 10),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                        # Use Vietnamese-compatible text rendering
+                        output_frame = put_text_with_background(
+                            output_frame, action_label, (x1, y1 - 30),
+                            font_size=16, text_color=(0, 255, 0), 
+                            bg_color=(0, 0, 0), padding=3
+                        )
                         if conf_text:
-                            cv2.putText(output_frame, conf_text, (x1, y2 + 20),
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+                            output_frame = put_text_with_background(
+                                output_frame, conf_text, (x1, y2 + 5),
+                                font_size=12, text_color=(0, 255, 0),
+                                bg_color=(0, 0, 0), padding=2
+                            )
                     
                     # Draw pose skeleton
                     self._draw_pose(output_frame, keypoints)
@@ -300,8 +370,12 @@ class CameraModule:
                 else:
                     label = f"Person_{track_id}" if track_id else "Person"
                 cv2.rectangle(output_frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
-                cv2.putText(output_frame, label, (int(x1), int(y1) - 10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                # Use Vietnamese-compatible text rendering
+                output_frame = put_text_with_background(
+                    output_frame, label, (int(x1), int(y1) - 30),
+                    font_size=16, text_color=(0, 255, 0),
+                    bg_color=(0, 0, 0), padding=3
+                )
         
         return output_frame
     
@@ -329,6 +403,219 @@ class CameraModule:
         try:
             return self.frame_queue.get(timeout=timeout)
         except queue.Empty:
+            return None
+    
+    def _extract_person_mask_from_segresults(self, frame, bbox, box_idx, seg_results):
+        """
+        Extract binary mask/silhouette từ seg_results (giống object_box_lib)
+        Crop and resize with aspect ratio preservation
+        
+        Args:
+            frame: Original frame (H, W, 3)
+            bbox: [x1, y1, x2, y2] bounding box của người
+            box_idx: Index của detection trong pose results để match với seg_results
+            seg_results: Results từ seg_model.track()
+        
+        Returns:
+            Binary mask (224, 224) - grayscale silhouette với padding, hoặc None nếu không có mask
+        """
+        if seg_results is None or seg_results[0].masks is None:
+            return None
+        
+        try:
+            masks_data = seg_results[0].masks.data.cpu().numpy()
+            
+            # Match mask với bbox dựa trên IoU
+            x1, y1, x2, y2 = bbox
+            best_mask = None
+            best_iou = 0.0
+            
+            if seg_results[0].boxes is not None:
+                seg_boxes = seg_results[0].boxes
+                
+                for mask_idx, (mask, seg_box) in enumerate(zip(masks_data, seg_boxes)):
+                    # Check class
+                    cls = int(seg_box.cls[0]) if hasattr(seg_box.cls, '__getitem__') else int(seg_box.cls)
+                    if cls != 0:  # Only person
+                        continue
+                    
+                    # Compute IoU
+                    seg_xyxy = seg_box.xyxy[0].cpu().numpy()
+                    sx1, sy1, sx2, sy2 = seg_xyxy
+                    
+                    ix1 = max(x1, sx1)
+                    iy1 = max(y1, sy1)
+                    ix2 = min(x2, sx2)
+                    iy2 = min(y2, sy2)
+                    
+                    inter_area = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+                    box1_area = (x2 - x1) * (y2 - y1)
+                    box2_area = (sx2 - sx1) * (sy2 - sy1)
+                    union_area = box1_area + box2_area - inter_area
+                    
+                    iou = inter_area / (union_area + 1e-7)
+                    
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_mask = mask
+            
+            if best_mask is None or best_iou < 0.3:
+                return None
+            
+            # Resize mask to frame size
+            img_h, img_w = frame.shape[:2]
+            mask_resized = cv2.resize(best_mask, (img_w, img_h))
+            mask_binary = ((mask_resized > 0.5) * 255).astype(np.uint8)
+            
+            # Apply mask to frame (chỉ giữ phần trong mask)
+            masked_frame = np.zeros_like(frame)
+            masked_frame[mask_binary > 127] = 255  # White silhouette
+            
+            # Tính center và max_side từ bbox
+            bbox_w = x2 - x1
+            bbox_h = y2 - y1
+            center_x = (x1 + x2) / 2
+            center_y = (y1 + y2) / 2
+            max_side = max(bbox_w, bbox_h)
+            
+            # Tạo square crop region
+            crop_x1 = int(center_x - max_side / 2)
+            crop_y1 = int(center_y - max_side / 2)
+            crop_x2 = crop_x1 + int(max_side)
+            crop_y2 = crop_y1 + int(max_side)
+            
+            # Tính intersection với frame
+            src_x1 = max(0, crop_x1)
+            src_y1 = max(0, crop_y1)
+            src_x2 = min(img_w, crop_x2)
+            src_y2 = min(img_h, crop_y2)
+            
+            dst_x1 = max(0, -crop_x1)
+            dst_y1 = max(0, -crop_y1)
+            
+            # Tạo canvas vuông với padding
+            canvas = np.zeros((int(max_side), int(max_side)), dtype=np.uint8)
+            
+            # Copy masked region vào canvas (convert to grayscale)
+            if src_x1 < src_x2 and src_y1 < src_y2:
+                src_region = masked_frame[src_y1:src_y2, src_x1:src_x2]
+                if len(src_region.shape) == 3:
+                    src_region = cv2.cvtColor(src_region, cv2.COLOR_BGR2GRAY)
+                h = src_y2 - src_y1
+                w = src_x2 - src_x1
+                canvas[dst_y1:dst_y1 + h, dst_x1:dst_x1 + w] = src_region
+            
+            # Resize to 224x224 với aspect ratio preservation
+            canvas_h, canvas_w = canvas.shape[:2]
+            scale = min(224.0 / canvas_w, 224.0 / canvas_h)
+            new_w = max(1, int(canvas_w * scale))
+            new_h = max(1, int(canvas_h * scale))
+            
+            # Resize mask
+            mask_small = cv2.resize(canvas, (new_w, new_h))
+            
+            # Center trong 224x224 canvas
+            final_mask = np.zeros((224, 224), dtype=np.uint8)
+            x_off = (224 - new_w) // 2
+            y_off = (224 - new_h) // 2
+            final_mask[y_off:y_off + new_h, x_off:x_off + new_w] = mask_small
+            
+            return final_mask
+            
+        except Exception as e:
+            print(f"Error extracting person mask from seg_results: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def _extract_person_mask(self, frame, bbox):
+        """
+        Extract binary mask/silhouette for a person using segmentation model
+        Crop and resize with aspect ratio preservation (giống crop_and_resize_gpu)
+        
+        Args:
+            frame: Original frame (H, W, 3)
+            bbox: [x1, y1, x2, y2] bounding box của người
+        
+        Returns:
+            Binary mask (224, 224) - grayscale silhouette với padding, hoặc None nếu không có mask
+        """
+        if self.seg_model is None:
+            return None
+        
+        try:
+            x1, y1, x2, y2 = bbox
+            img_h, img_w = frame.shape[:2]
+            
+            # Tính center và box_size (giống crop_and_resize_gpu)
+            bbox_w = x2 - x1
+            bbox_h = y2 - y1
+            center_x = (x1 + x2) / 2
+            center_y = (y1 + y2) / 2
+            max_side = max(bbox_w, bbox_h)
+            
+            # Tạo square crop region
+            crop_x1 = int(center_x - max_side / 2)
+            crop_y1 = int(center_y - max_side / 2)
+            crop_x2 = crop_x1 + int(max_side)
+            crop_y2 = crop_y1 + int(max_side)
+            
+            # Tính intersection với frame
+            src_x1 = max(0, crop_x1)
+            src_y1 = max(0, crop_y1)
+            src_x2 = min(img_w, crop_x2)
+            src_y2 = min(img_h, crop_y2)
+            
+            dst_x1 = max(0, -crop_x1)
+            dst_y1 = max(0, -crop_y1)
+            
+            # Tạo canvas vuông với padding
+            canvas = np.zeros((int(max_side), int(max_side), 3), dtype=np.uint8)
+            
+            # Copy region vào canvas
+            if src_x1 < src_x2 and src_y1 < src_y2:
+                src_region = frame[src_y1:src_y2, src_x1:src_x2]
+                h = src_y2 - src_y1
+                w = src_x2 - src_x1
+                canvas[dst_y1:dst_y1 + h, dst_x1:dst_x1 + w] = src_region
+            
+            # Run segmentation trên canvas
+            seg_results = self.seg_model.predict(source=canvas, save=False, conf=0.5, verbose=False)
+            
+            if seg_results[0].masks is not None and seg_results[0].boxes is not None:
+                masks = seg_results[0].masks.data.cpu().numpy()
+                boxes = seg_results[0].boxes
+                
+                # Tìm mask của người (class 0)
+                canvas_h, canvas_w = canvas.shape[:2]
+                for mask, box in zip(masks, boxes):
+                    cls = int(box.cls[0]) if hasattr(box.cls, '__getitem__') else int(box.cls)
+                    if cls == 0:  # Person class
+                        # Resize mask về kích thước canvas
+                        mask_resized = cv2.resize(mask, (canvas_w, canvas_h))
+                        # Convert sang binary [0, 255]
+                        binary_mask = ((mask_resized > 0.5) * 255).astype(np.uint8)
+                        
+                        # Resize to 224x224 với aspect ratio preservation
+                        scale = min(224.0 / canvas_w, 224.0 / canvas_h)
+                        new_w = max(1, int(canvas_w * scale))
+                        new_h = max(1, int(canvas_h * scale))
+                        
+                        # Resize mask
+                        mask_small = cv2.resize(binary_mask, (new_w, new_h))
+                        
+                        # Center trong 224x224 canvas
+                        final_mask = np.zeros((224, 224), dtype=np.uint8)
+                        x_off = (224 - new_w) // 2
+                        y_off = (224 - new_h) // 2
+                        final_mask[y_off:y_off + new_h, x_off:x_off + new_w] = mask_small
+                        
+                        return final_mask
+            
+            return None
+            
+        except Exception as e:
+            print(f"Error extracting person mask: {e}")
             return None
     
     def set_options(self, bbox=None, pose=None, segmentation=None, action_recognition=None):
