@@ -27,7 +27,7 @@ class CameraApp:
         self.gait_processing = False
         self.loaded = False
         self.running = False
-        self.current_tab = 0  # 0: Camera, 1: Object Box, 2: Person Videos, 3: Gait Preprocess, 4: Gait Labeling
+        self.current_tab = 0  # 0: Camera, 1: Object Box, 2: BR dataset, 3: Person Videos, 4: Gait Preprocess, 5: Gait Labeling
         self.update_thread = None
         self.labeling_video_playing = False  # Flag to control video playback
         self.current_labeling_video = None  # Track current video file
@@ -72,19 +72,24 @@ class CameraApp:
                                             command=lambda: self.switch_tab(1))
         self.objectbox_tab_btn.pack(side=tk.LEFT, padx=2)
 
+        self.dataset_tab_btn = tk.Button(tab_button_frame, text="BR dataset", width=15,
+                         font=("Segoe UI", 12),
+                         command=lambda: self.switch_tab(2))
+        self.dataset_tab_btn.pack(side=tk.LEFT, padx=2)
+
         self.person_videos_tab_btn = tk.Button(tab_button_frame, text="Person Videos", width=15,
-                          font=("Segoe UI", 12),
-                          command=lambda: self.switch_tab(2))
+                 font=("Segoe UI", 12),
+                 command=lambda: self.switch_tab(3))
         self.person_videos_tab_btn.pack(side=tk.LEFT, padx=2)
 
         self.gait_tab_btn = tk.Button(tab_button_frame, text="Gait Preprocess", width=15,
-                           font=("Segoe UI", 12),
-                           command=lambda: self.switch_tab(3))
+                   font=("Segoe UI", 12),
+                   command=lambda: self.switch_tab(4))
         self.gait_tab_btn.pack(side=tk.LEFT, padx=2)
         
         self.gait_labeling_tab_btn = tk.Button(tab_button_frame, text="Gait Labeling", width=15,
-                          font=("Segoe UI", 12),
-                          command=lambda: self.switch_tab(4))
+                  font=("Segoe UI", 12),
+                  command=lambda: self.switch_tab(5))
         self.gait_labeling_tab_btn.pack(side=tk.LEFT, padx=2)
         
         # Webcam input (for Camera and Object Box tabs)
@@ -198,46 +203,46 @@ class CameraApp:
                  command=lambda: self.navigate_person('next')).pack(side=tk.LEFT, padx=5)
         
         # Left panel - Dataset tab content (initially hidden)
-        self.left_panel_dataset = tk.Frame(self.left_container, relief=tk.RAISED, borderwidth=1)
-        self.left_panel_dataset.pack_propagate(False)
+        self.left_panel_dataset_generator = tk.Frame(self.left_container, relief=tk.RAISED, borderwidth=1)
+        self.left_panel_dataset_generator.pack_propagate(False)
         
-        # Dataset controls
-        tk.Label(self.left_panel_dataset, text="Dataset Generator", 
-                font=("Segoe UI", 11, "bold")).pack(pady=15, anchor=tk.W, padx=10)
+        # Dataset controls (BR dataset)
+        tk.Label(self.left_panel_dataset_generator, text="Dataset Generator", 
+            font=("Segoe UI", 11, "bold")).pack(pady=15, anchor=tk.W, padx=10)
         
         # Note: Pose and Segmentation are always enabled for dataset generation
-        tk.Label(self.left_panel_dataset, text="✓ Pose keypoints enabled\n✓ Segmentation mask enabled", 
-                font=("Segoe UI", 9), fg="green", justify=tk.LEFT).pack(anchor=tk.W, padx=15, pady=5)
+        tk.Label(self.left_panel_dataset_generator, text="✓ Pose keypoints enabled\n✓ Segmentation mask enabled", 
+            font=("Segoe UI", 9), fg="green", justify=tk.LEFT).pack(anchor=tk.W, padx=15, pady=5)
         
         # File selection
-        tk.Label(self.left_panel_dataset, text="Video files:", 
-                font=("Segoe UI", 10, "bold")).pack(pady=(20,5), anchor=tk.W, padx=10)
+        tk.Label(self.left_panel_dataset_generator, text="Video files:", 
+            font=("Segoe UI", 10, "bold")).pack(pady=(20,5), anchor=tk.W, padx=10)
         
         # File listbox
-        file_frame = tk.Frame(self.left_panel_dataset)
+        file_frame = tk.Frame(self.left_panel_dataset_generator)
         file_frame.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
         
         scrollbar = tk.Scrollbar(file_frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         self.file_listbox = tk.Listbox(file_frame, height=8, font=("Segoe UI", 9),
-                                       yscrollcommand=scrollbar.set)
+                           yscrollcommand=scrollbar.set)
         self.file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.file_listbox.yview)
         
         # Buttons
-        btn_frame = tk.Frame(self.left_panel_dataset)
+        btn_frame = tk.Frame(self.left_panel_dataset_generator)
         btn_frame.pack(pady=10)
         
         tk.Button(btn_frame, text="Add Files", width=12, 
-                 font=("Segoe UI", 10), command=self.add_dataset_files).pack(side=tk.LEFT, padx=2)
+             font=("Segoe UI", 10), command=self.add_dataset_files).pack(side=tk.LEFT, padx=2)
         tk.Button(btn_frame, text="Clear", width=12, 
-                 font=("Segoe UI", 10), command=self.clear_dataset_files).pack(side=tk.LEFT, padx=2)
+             font=("Segoe UI", 10), command=self.clear_dataset_files).pack(side=tk.LEFT, padx=2)
         
         # Process button
-        self.process_dataset_btn = tk.Button(self.left_panel_dataset, text="Process Dataset", 
-                                            width=20, font=("Segoe UI", 10, "bold"),
-                                            command=self.process_dataset)
+        self.process_dataset_btn = tk.Button(self.left_panel_dataset_generator, text="Process Dataset", 
+                            width=20, font=("Segoe UI", 10, "bold"),
+                            command=self.process_dataset)
         self.process_dataset_btn.pack(pady=15)
 
         # Left panel - Gait Preprocess tab content (initially hidden)
@@ -304,41 +309,41 @@ class CameraApp:
                                          font=("Segoe UI", 8), fg="gray")
         self.gait_stats_label.pack(pady=5)
         
-        # Left panel - Person Videos tab (Dataset renamed)
-        self.left_panel_dataset = tk.Frame(self.left_container, relief=tk.RAISED, borderwidth=1)
-        self.left_panel_dataset.pack_propagate(False)
+        # Left panel - Person Videos tab
+        self.left_panel_person_videos = tk.Frame(self.left_container, relief=tk.RAISED, borderwidth=1)
+        self.left_panel_person_videos.pack_propagate(False)
         
-        # Dataset controls
-        tk.Label(self.left_panel_dataset, text="Person Video Manager", 
-                font=("Segoe UI", 11, "bold")).pack(pady=15, anchor=tk.W, padx=10)
+        # Person Video Manager controls
+        tk.Label(self.left_panel_person_videos, text="Person Video Manager", 
+            font=("Segoe UI", 11, "bold")).pack(pady=15, anchor=tk.W, padx=10)
         
         # Processed videos listbox
-        mgmt_frame = tk.Frame(self.left_panel_dataset)
+        mgmt_frame = tk.Frame(self.left_panel_person_videos)
         mgmt_frame.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
         
         mgmt_scrollbar = tk.Scrollbar(mgmt_frame)
         mgmt_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         self.processed_listbox = tk.Listbox(mgmt_frame, height=6, font=("Segoe UI", 8),
-                                           selectmode=tk.MULTIPLE,
-                                           yscrollcommand=mgmt_scrollbar.set)
+                           selectmode=tk.MULTIPLE,
+                           yscrollcommand=mgmt_scrollbar.set)
         self.processed_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         mgmt_scrollbar.config(command=self.processed_listbox.yview)
         
         # Management buttons
-        mgmt_btn_frame = tk.Frame(self.left_panel_dataset)
+        mgmt_btn_frame = tk.Frame(self.left_panel_person_videos)
         mgmt_btn_frame.pack(pady=5)
         
         tk.Button(mgmt_btn_frame, text="Delete Selected", width=12, 
-                 font=("Segoe UI", 9), command=self.delete_selected_dataset).pack(side=tk.LEFT, padx=2)
+             font=("Segoe UI", 9), command=self.delete_selected_dataset).pack(side=tk.LEFT, padx=2)
         tk.Button(mgmt_btn_frame, text="Delete All", width=12, 
-                 font=("Segoe UI", 9), command=self.delete_all_datasets).pack(side=tk.LEFT, padx=2)
+             font=("Segoe UI", 9), command=self.delete_all_datasets).pack(side=tk.LEFT, padx=2)
         tk.Button(mgmt_btn_frame, text="Refresh", width=12, 
-                 font=("Segoe UI", 9), command=self.refresh_dataset_list).pack(side=tk.LEFT, padx=2)
+             font=("Segoe UI", 9), command=self.refresh_dataset_list).pack(side=tk.LEFT, padx=2)
         
         # Stats label
-        self.dataset_stats_label = tk.Label(self.left_panel_dataset, text="", 
-                                           font=("Segoe UI", 8), fg="gray")
+        self.dataset_stats_label = tk.Label(self.left_panel_person_videos, text="", 
+                           font=("Segoe UI", 8), fg="gray")
         self.dataset_stats_label.pack(pady=5)
         
         # Left panel - Gait Labeling tab
@@ -456,6 +461,7 @@ class CameraApp:
         # Reset all tab buttons
         self.camera_tab_btn.config(font=("Segoe UI", 12), relief=tk.RAISED)
         self.objectbox_tab_btn.config(font=("Segoe UI", 12), relief=tk.RAISED)
+        self.dataset_tab_btn.config(font=("Segoe UI", 12), relief=tk.RAISED)
         self.person_videos_tab_btn.config(font=("Segoe UI", 12), relief=tk.RAISED)
         self.gait_tab_btn.config(font=("Segoe UI", 12), relief=tk.RAISED)
         self.gait_labeling_tab_btn.config(font=("Segoe UI", 12), relief=tk.RAISED)
@@ -463,7 +469,8 @@ class CameraApp:
         # Hide all panels
         self.left_panel_camera.pack_forget()
         self.left_panel_objectbox.pack_forget()
-        self.left_panel_dataset.pack_forget()
+        self.left_panel_dataset_generator.pack_forget()
+        self.left_panel_person_videos.pack_forget()
         self.left_panel_gait.pack_forget()
         self.left_panel_labeling.pack_forget()
         
@@ -487,9 +494,23 @@ class CameraApp:
             
             self.status_label.config(text="Object Box tab selected")
             
-        elif tab_index == 2:  # Person Videos tab
+        elif tab_index == 2:  # BR dataset tab (Dataset Generator)
+            self.dataset_tab_btn.config(font=("Segoe UI", 12, "bold"), relief=tk.SUNKEN)
+            self.left_panel_dataset_generator.pack(fill=tk.BOTH, expand=True)
+            
+            # Hide webcam controls, show dataset path
+            self.webcam_frame.pack_forget()
+            self.dataset_path_frame.pack(side=tk.LEFT, padx=20)
+
+            # Show info overlay if processing
+            if self.dataset_processing:
+                self.info_overlay_frame.place(relx=0.5, rely=0.5, anchor=tk.CENTER, width=700, height=300)
+
+            self.status_label.config(text="BR dataset tab selected")
+
+        elif tab_index == 3:  # Person Videos tab
             self.person_videos_tab_btn.config(font=("Segoe UI", 12, "bold"), relief=tk.SUNKEN)
-            self.left_panel_dataset.pack(fill=tk.BOTH, expand=True)
+            self.left_panel_person_videos.pack(fill=tk.BOTH, expand=True)
             
             # Hide webcam controls, show dataset path
             self.webcam_frame.pack_forget()
@@ -504,7 +525,7 @@ class CameraApp:
             
             self.status_label.config(text="Person Videos tab selected")
             
-        elif tab_index == 3:  # Gait preprocess tab
+        elif tab_index == 4:  # Gait preprocess tab
             self.gait_tab_btn.config(font=("Segoe UI", 12, "bold"), relief=tk.SUNKEN)
             self.left_panel_gait.pack(fill=tk.BOTH, expand=True)
 
@@ -517,7 +538,7 @@ class CameraApp:
 
             self.status_label.config(text="Gait Preprocess tab selected")
 
-        else:  # Gait Labeling tab (tab_index == 4)
+        else:  # Gait Labeling tab (tab_index == 5)
             self.gait_labeling_tab_btn.config(font=("Segoe UI", 12, "bold"), relief=tk.SUNKEN)
             self.left_panel_labeling.pack(fill=tk.BOTH, expand=True)
             
@@ -1512,8 +1533,8 @@ class CameraApp:
             except:
                 break
             
-            # Check if still on labeling tab
-            if self.current_tab != 4:
+            # Check if still on labeling tab (index 5 after reorder)
+            if self.current_tab != 5:
                 break
             
             cv2.waitKey(30)  # ~30 fps
