@@ -94,24 +94,15 @@ class OpenSetGaitMatcher:
         if not os.path.exists(self.filename):
             if isinstance(probe_vector_or_X, np.ndarray) and probe_vector_or_X.ndim == 2:
                 n = probe_vector_or_X.shape[0]
-                return np.array([-1] * n), np.array([float('inf')] * n)
+                return np.array(["Unknown"] * n), np.array([float('inf')] * n)
             return {"user_id": "Unknown", "is_known": False}
 
         with open(self.filename, 'r', encoding='utf-8') as f:
             database = json.load(f)
 
-        # Normalize keys to int when possible
-        db = {}
-        for k, v in database.items():
-            try:
-                key = int(k)
-            except:
-                key = k
-            db[key] = v
-
         def predict_single(vec):
-            best_match = {"user_id": -1, "distance": float('inf'), "is_known": False, "threshold": 0}
-            for user_id, protos in db.items():
+            best_match = {"user_id": "Unknown", "distance": float('inf'), "is_known": False, "threshold": 0}
+            for user_id, protos in database.items():
                 for proto in protos:
                     centroid = np.array(proto['centroid'])
                     if 'cov_diag' in proto and self.metric == 'mahalanobis':
@@ -132,7 +123,7 @@ class OpenSetGaitMatcher:
             if best_match['distance'] <= best_match.get('threshold', 0):
                 best_match['is_known'] = True
             else:
-                best_match['user_id'] = -1
+                best_match['user_id'] = "Unknown"
             return best_match
 
         arr = np.asarray(probe_vector_or_X)
@@ -223,66 +214,3 @@ class OpenSetGaitMatcher:
             json.dump(data, f, indent=4, ensure_ascii=False)
 
         print(f"✅ Calibrated thresholds using percentile={percentile} and saved to {self.filename}")
-
-    def predict(self, probe_vector_or_X):
-        """
-        If input is a single vector (1D) return a dict like before.
-        If input is a 2D array, return (preds, dists) where preds are label ints or -1 for unknown.
-        """
-        if not os.path.exists(self.filename):
-            if isinstance(probe_vector_or_X, np.ndarray) and probe_vector_or_X.ndim == 2:
-                n = probe_vector_or_X.shape[0]
-                return np.array([-1] * n), np.array([float('inf')] * n)
-            return {"user_id": "Unknown", "is_known": False}
-
-        with open(self.filename, 'r', encoding='utf-8') as f:
-            database = json.load(f)
-
-        # Normalize keys to int when possible
-        db = {}
-        for k, v in database.items():
-            try:
-                key = int(k)
-            except:
-                key = k
-            db[key] = v
-
-        def predict_single(vec):
-            best_match = {"user_id": -1, "distance": float('inf'), "is_known": False, "threshold": 0}
-            for user_id, protos in db.items():
-                for proto in protos:
-                    centroid = np.array(proto['centroid'])
-                    if 'cov_diag' in proto and self.metric == 'mahalanobis':
-                        dist = self._mahalanobis_dist(vec, centroid, proto['cov_diag'])
-                    else:
-                        use_metric = self.metric
-                        if self.metric == 'mahalanobis':
-                            use_metric = 'euclidean'
-                        dist = cdist(vec.reshape(1, -1), centroid.reshape(1, -1), metric=use_metric)[0][0]
-
-                    if dist < best_match['distance']:
-                        best_match.update({
-                            'user_id': user_id,
-                            'distance': float(dist),
-                            'threshold': float(proto.get('threshold', 0))
-                        })
-
-            if best_match['distance'] <= best_match.get('threshold', 0):
-                best_match['is_known'] = True
-            else:
-                best_match['user_id'] = -1
-            return best_match
-
-        arr = np.asarray(probe_vector_or_X)
-        if arr.ndim == 1:
-            return predict_single(arr)
-
-        # Batch
-        preds = []
-        dists = []
-        for vec in arr:
-            m = predict_single(vec)
-            preds.append(m['user_id'])
-            dists.append(m['distance'])
-
-        return np.array(preds), np.array(dists)
