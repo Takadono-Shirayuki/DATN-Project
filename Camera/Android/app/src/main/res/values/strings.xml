@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GR2 Camera</string>
+    <string name="server_ip_hint">Server IP Address</string>
+    <string name="server_port_hint">Server Port</string>
+    <string name="connect_button">Connect</string>
+    <string name="camera_preview">Camera Preview</string>
+</resources>

@@ -1,6 +1,0 @@
-numpy
-scipy
-scikit-learn
-torch
-torchvision
-# (augmentation deps removed per user request)

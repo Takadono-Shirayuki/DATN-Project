@@ -1,0 +1,40 @@
+# Camera Configuration
+camera:
+  device_id: 0
+  frame_width: 640
+  frame_height: 480
+  fps: 30
+  # Optional: 1280x720, 1920x1080
+  # Optional: 15, 60
+
+# Server Configuration
+server:
+  # Set via command line: --server-ip, --server-port
+  # Default values:
+  ip: "localhost"
+  port: 3000
+  timeout: 10
+
+# Device Configuration
+device:
+  device_name: "camera-001"
+  device_type: "camera"  # camera or phone
+  mode: "streaming"  # streaming or recognition
+
+# YOLO Models
+models:
+  yolo_detection: "yolov8n.pt"  # nano for less computation
+  yolo_pose: "yolov8s-pose.pt"
+  action_classifier: "action_classifier.pth"
+
+# Feature Flags
+features:
+  enable_pose_estimation: true
+  enable_action_classification: true
+  enable_gei_generation: true
+  enable_display: true  # show GUI
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "camera_app.log"

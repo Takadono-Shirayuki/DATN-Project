@@ -1,0 +1,30 @@
+# Android
+.gradle/
+.idea/
+*.iml
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Build
+build/
+bin/
+
+# IDE
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Gradle
+gradle/wrapper/gradle-wrapper.jar
+.gradle/
+
+# Models (large files)
+*.pt
+*.pth
+*.tflite

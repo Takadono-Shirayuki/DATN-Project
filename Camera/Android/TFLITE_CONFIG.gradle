@@ -1,0 +1,23 @@
+<!-- Build configuration for TensorFlow Lite -->
+
+android {
+    ...
+    
+    // Add this for TFLite GPU delegate support
+    packagingOptions {
+        exclude 'META-INF/proguard/androidx-*.pro'
+        exclude 'META-INF/services/org.tensorflow.lite.delegates.gpu.GpuDelegate'
+    }
+    
+    // Enable minification for release builds
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    
+    lint {
+        abortOnError false
+    }
+}
