@@ -24,6 +24,7 @@ class CameraManager(
 
     private var imageAnalysisCallback: ((image: ImageProxy) -> Unit)? = null
     private var cameraProvider: ProcessCameraProvider? = null
+    private var preview: Preview? = null
     private var lensFacing = CameraSelector.LENS_FACING_BACK
 
     fun startCamera(
@@ -68,6 +69,7 @@ class CameraManager(
             val preview = Preview.Builder().build().also {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
+            this.preview = preview
 
             val imageAnalysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -100,10 +102,21 @@ class CameraManager(
 
     fun stopCamera() {
         imageAnalysisCallback = null
+        preview = null
         Handler(Looper.getMainLooper()).post {
             cameraProvider?.unbindAll()
             cameraProvider = null
             Log.d(TAG, "Camera stopped")
         }
+    }
+
+    /** Call from Activity.onPause() so CameraX doesn't fight a destroyed window surface. */
+    fun detachPreviewSurface() {
+        preview?.setSurfaceProvider(null)
+    }
+
+    /** Call from Activity.onResume() to restore live preview. */
+    fun reattachPreviewSurface() {
+        preview?.setSurfaceProvider(previewView.surfaceProvider)
     }
 }

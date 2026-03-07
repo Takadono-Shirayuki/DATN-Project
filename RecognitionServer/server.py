@@ -25,9 +25,48 @@ from datetime import datetime
 import websockets
 import torch
 from ultralytics import YOLO
+from PIL import Image, ImageDraw, ImageFont
 
 # ---------------------------------------------------------------------------
 _HERE = os.path.dirname(os.path.abspath(__file__))
+
+# ---------------------------------------------------------------------------
+# Unicode / Vietnamese font helper
+# ---------------------------------------------------------------------------
+
+_FONT_CACHE: dict = {}
+
+def _load_unicode_font(size: int = 16) -> ImageFont.FreeTypeFont:
+    """Load a TrueType font that supports Vietnamese characters.
+
+    Tries common system font paths (Windows then Linux).  Falls back to
+    PIL's built-in bitmap font if no TrueType font is found.
+    """
+    if size in _FONT_CACHE:
+        return _FONT_CACHE[size]
+    candidates = [
+        # Windows
+        r"C:\Windows\Fonts\arial.ttf",
+        r"C:\Windows\Fonts\segoeui.ttf",
+        r"C:\Windows\Fonts\times.ttf",
+        # Linux / macOS
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+    ]
+    font = None
+    for fp in candidates:
+        if os.path.exists(fp):
+            try:
+                font = ImageFont.truetype(fp, size)
+                break
+            except Exception:
+                continue
+    if font is None:
+        font = ImageFont.load_default()
+    _FONT_CACHE[size] = font
+    return font
 
 from action_classifier_module import ActionRecognizer
 from gait_recognizer_module import GaitRecognizer
@@ -288,29 +327,54 @@ class RecognitionPipeline:
         Draw bounding boxes and recognition labels on the original frame.
           - Bounding boxes (green = walking, orange = not walking)
           - Text labels: person ID, action %, gait identity
+        Uses PIL for text rendering so Vietnamese (Unicode) characters display correctly.
         """
         vis = original_bgr.copy()
 
+        # --- Bounding boxes (OpenCV, no Unicode needed) ---
         for p in persons:
             x1, y1, x2, y2 = p['bbox']
-            is_walking = p['is_walking']
-            color = (0, 255, 0) if is_walking else (0, 165, 255)  # green / orange
-
+            color = (0, 255, 0) if p['is_walking'] else (0, 165, 255)  # green / orange
             cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
 
-            lines = [
-                f"{p['id']} | {p['action']} {p['confidence']:.0%}",
-                f"Gait: {p['gait_label']}",
-            ]
+        # --- Text labels (PIL for full Unicode / Vietnamese support) ---
+        pil_img = Image.fromarray(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil_img)
+        font = _load_unicode_font(16)
+
+        for p in persons:
+            x1, y1, x2, y2 = p['bbox']
+            color_bgr = (0, 255, 0) if p['is_walking'] else (0, 165, 255)
+            color_rgb = (color_bgr[2], color_bgr[1], color_bgr[0])  # BGR → RGB
+            if p['gait_label'] == 'Unknown':
+                lines = [
+                    f"{p['action']} {p['confidence']:.0%}",
+                    f"Gait: Unknown {p['id']}",
+                ]
+            else:
+                lines = [
+                    f"Gait: {p['gait_label']}"
+                ]
             for row, txt in enumerate(lines):
+                # ty acts as the baseline (bottom of text), matching original layout
                 ty = y1 - 5 - row * 20
                 if ty < 18:
                     ty = y2 + 15 + row * 20
-                (tw, th), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-                cv2.rectangle(vis, (x1, ty - th - 3), (x1 + tw + 4, ty + 3), (0, 0, 0), -1)
-                cv2.putText(vis, txt, (x1 + 2, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
-        return vis
+                # Measure text with PIL
+                bbox_px = draw.textbbox((0, 0), txt, font=font)
+                tw = bbox_px[2] - bbox_px[0]
+                th = bbox_px[3] - bbox_px[1]
+
+                # Black background rectangle
+                draw.rectangle(
+                    [x1, ty - th - 3, x1 + tw + 4, ty + 3],
+                    fill=(0, 0, 0)
+                )
+                # Text: PIL uses top-left origin, so top = ty - th
+                draw.text((x1 + 2, ty - th), txt, font=font, fill=color_rgb)
+
+        return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +459,8 @@ class RecognitionServer:
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix='pipeline')
         # Active sessions keyed by device_label.
         self._sessions: dict[str, _CameraSession] = {}
+        # WebSocket references for live Android cameras (keyed by device_label = IP string).
+        self._camera_websockets: dict = {}
 
     # ------------------------------------------------------------------
     # Shared broadcast helper
@@ -434,6 +500,15 @@ class RecognitionServer:
                 dead.add(ws)
         self.monitors -= dead
 
+    async def _broadcast_camera_disconnected(self, device_label: str):
+        dead = set()
+        for ws in self.monitors:
+            try:
+                await ws.send(json.dumps({'type': 'camera_disconnected', 'device': device_label}))
+            except Exception:
+                dead.add(ws)
+        self.monitors -= dead
+
     async def _broadcast_error(self, msg: str):
         dead = set()
         for ws in self.monitors:
@@ -466,6 +541,14 @@ class RecognitionServer:
                     if msg.get('type') == 'video_path':
                         path = msg.get('path', '').strip()
                         asyncio.ensure_future(self._play_video_file(path))
+                    elif msg.get('type') == 'remove_camera':
+                        device = msg.get('device', '')
+                        if device in self._sessions:
+                            self._sessions.pop(device).stop()
+                        if device in self._camera_websockets:
+                            ws = self._camera_websockets.pop(device)
+                            await ws.close(code=1000, reason='removed_by_monitor')
+                        logger.info(f"Removed device: {device}")
                 except Exception:
                     pass
         except websockets.exceptions.ConnectionClosed:
@@ -480,10 +563,17 @@ class RecognitionServer:
         device_label = str(client_addr[0]) if client_addr else 'camera'
         logger.info(f"Camera connected: {client_addr}")
 
+        # Store websocket reference so monitor can close it remotely.
+        self._camera_websockets[device_label] = websocket
+
         # One session per device_label; if the same IP reconnects, reuse slot.
         session = _CameraSession(device_label, self)
         self._sessions[device_label] = session
         session.start()
+
+        _MAX_FPS = 30
+        _MIN_INTERVAL = 1.0 / _MAX_FPS  # seconds between accepted frames
+        _last_enqueue = 0.0
 
         try:
             async for message in websocket:
@@ -492,6 +582,11 @@ class RecognitionServer:
                     frame_b64 = data.get('frame')
                     if not frame_b64:
                         continue
+                    # FPS cap: drop frames that arrive faster than MAX_FPS
+                    now = asyncio.get_event_loop().time()
+                    if now - _last_enqueue < _MIN_INTERVAL:
+                        continue
+                    _last_enqueue = now
                     frame_bytes = base64.b64decode(frame_b64)
                     np_arr = np.frombuffer(frame_bytes, np.uint8)
                     frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
@@ -506,6 +601,9 @@ class RecognitionServer:
         finally:
             session.stop()
             self._sessions.pop(device_label, None)
+            self._camera_websockets.pop(device_label, None)
+            await self._broadcast_camera_disconnected(device_label)
+            logger.info(f"[{device_label}] Camera session cleaned up.")
 
     async def _play_video_file(self, video_path: str):
         """Stream a local video file through its own isolated session."""
@@ -534,13 +632,30 @@ class RecognitionServer:
         self._sessions[device_label] = session
         session.start()
 
+        # Pace video playback: cap at 30 FPS regardless of source FPS.
+        _MAX_FPS = 30
+        src_fps = cap.get(cv2.CAP_PROP_FPS) or _MAX_FPS
+        frame_interval = 1.0 / min(src_fps, _MAX_FPS)
+        logger.info(
+            f"[{device_label}] source FPS={src_fps:.1f}, "
+            f"capped to {min(src_fps, _MAX_FPS):.1f} FPS "
+            f"(interval={frame_interval*1000:.1f} ms)"
+        )
+
         loop = asyncio.get_event_loop()
         try:
             while cap.isOpened():
+                t_read_start = loop.time()
                 ret, frame = await loop.run_in_executor(None, cap.read)
                 if not ret:
                     break
                 await session.queue.put(frame)
+                # Sleep for the remainder of the frame interval so we don't
+                # flood the queue faster than real-time playback.
+                elapsed = loop.time() - t_read_start
+                sleep_s = frame_interval - elapsed
+                if sleep_s > 0:
+                    await asyncio.sleep(sleep_s)
             # Sentinel — worker drains remaining frames then exits cleanly.
             await session.queue.put(None)
         except Exception as e:
@@ -552,7 +667,13 @@ class RecognitionServer:
             logger.info(f"Finished reading video: {video_path}")
 
     async def start(self):
-        async with websockets.serve(self.handle_connection, self.host, self.port):
+        async with websockets.serve(
+            self.handle_connection,
+            self.host,
+            self.port,
+            ping_interval=20,   # send a ping every 20 s
+            ping_timeout=10,    # close connection if no pong within 10 s
+        ):
             logger.info(f"Recognition server listening on ws://{self.host}:{self.port}")
             logger.info("  Endpoints:")
             logger.info("    ws://<host>:3001/camera  — Android camera client")

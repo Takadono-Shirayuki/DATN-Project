@@ -32,6 +32,7 @@ class NetworkManager(
         val client = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
+            .pingInterval(10, TimeUnit.SECONDS)
             .build()
 
         val request = Request.Builder()
@@ -66,6 +67,8 @@ class NetworkManager(
         super.onClosing(webSocket, code, reason)
         isConnected = false
         Log.d(TAG, "WebSocket closing: $code - $reason")
+        webSocket.close(1000, null)  // complete the close handshake
+        onStatusChanged(false)
     }
 
     override fun onFailure(webSocket: WebSocket, t: Throwable, response: okhttp3.Response?) {

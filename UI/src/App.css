@@ -286,6 +286,52 @@ body {
   font-size: 0.75rem;
 }
 
+.footer-host-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.footer-edit-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #4b5563;
+  font-size: 1rem;
+  padding: 4px 6px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+
+.footer-edit-btn:hover {
+  color: #cbd5e1;
+  background: rgba(255,255,255,0.06);
+}
+
+.footer-edit-btn.confirm {
+  color: #22c55e;
+  font-size: 1.05rem;
+}
+
+.footer-edit-btn.confirm:hover {
+  color: #4ade80;
+}
+
+.footer-host-input {
+  flex: 1;
+  background: #1e2330;
+  border: 1px solid #3b82f6;
+  border-radius: 4px;
+  color: #e2e8f0;
+  font-family: 'Courier New', monospace;
+  font-size: 0.78rem;
+  padding: 3px 6px;
+  outline: none;
+  min-width: 0;
+}
+
 /* ── Stream area ── */
 .stream-area {
   flex: 1;
@@ -364,4 +410,33 @@ body {
 .stream-ended-remove:hover {
   border-color: #ef4444;
   color: #f87171;
+}
+
+/* ── Server disconnected overlay ── */
+.stream-disconnected {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  width: 100%;
+  height: 100%;
+  background: #0a0c10;
+}
+
+.stream-disconnected-icon {
+  font-size: 2.5rem;
+  opacity: 0.4;
+}
+
+.stream-disconnected-msg {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #ef4444;
+  letter-spacing: 0.3px;
+}
+
+.stream-disconnected-sub {
+  font-size: 0.85rem;
+  color: var(--text-muted);
 }

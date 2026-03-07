@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 
 class CameraForegroundService : Service() {
@@ -16,6 +17,8 @@ class CameraForegroundService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "gr2_camera_channel"
     }
+
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -42,11 +45,25 @@ class CameraForegroundService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
 
-        return START_NOT_STICKY
+        // Keep CPU alive so network keeps running when screen is off
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "GR2Camera:StreamingLock")
+        wakeLock?.acquire(4 * 60 * 60 * 1000L) // up to 4 hours
+
+        return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        // User swiped app away from Recents — disconnect cleanly before dying.
+        MainActivity.triggerStop()
+        stopSelf()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {

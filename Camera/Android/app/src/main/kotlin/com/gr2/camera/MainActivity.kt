@@ -3,6 +3,10 @@ package com.gr2.camera
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.graphics.ImageFormat
@@ -19,16 +23,22 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.ProcessLifecycleOwner
 import com.gr2.camera.camera.CameraManager
 import com.gr2.camera.network.NetworkManager
 import java.io.ByteArrayOutputStream
+import java.lang.ref.WeakReference
 
 class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
         private const val PERMISSION_REQUEST_CODE = 100
+
+        // Weak reference so the service can trigger a clean disconnect when the task is removed.
+        private var weakInstance: WeakReference<MainActivity>? = null
+        fun triggerStop() {
+            weakInstance?.get()?.stopConnection()
+        }
     }
 
     private lateinit var cameraAreaLayout: FrameLayout
@@ -42,6 +52,7 @@ class MainActivity : AppCompatActivity() {
 
     private var cameraManager: CameraManager? = null
     private var networkManager: NetworkManager? = null
+    private var cameraLifecycle: AlwaysActiveLifecycleOwner? = null
 
     private var isRunning = false
     private var frameCount = 0L
@@ -49,6 +60,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        weakInstance = WeakReference(this)
         setContentView(R.layout.activity_main)
         initializeViews()
         checkPermissions()
@@ -71,8 +83,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkPermissions() {
-        val needed = arrayOf(Manifest.permission.CAMERA, Manifest.permission.INTERNET)
-            .filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        val permissions = mutableListOf(Manifest.permission.CAMERA, Manifest.permission.INTERNET)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        val needed = permissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
         if (needed.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, needed.toTypedArray(), PERMISSION_REQUEST_CODE)
         }
@@ -96,8 +113,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startCamera() {
-        // Bind camera to ProcessLifecycleOwner so it keeps running when app is in background
-        cameraManager = CameraManager(this, ProcessLifecycleOwner.get(), previewView)
+        // AlwaysActiveLifecycleOwner stays RESUMED regardless of Activity lifecycle,
+        // so camera + ImageAnalysis keep running when screen is off or app is backgrounded.
+        cameraLifecycle = AlwaysActiveLifecycleOwner()
+        cameraManager = CameraManager(this, cameraLifecycle!!, previewView)
         cameraManager?.startCamera { image -> onFrameAvailable(image) }
     }
 
@@ -165,7 +184,19 @@ class MainActivity : AppCompatActivity() {
         if (isRunning) stopConnection() else startConnection(serverIP, port)
     }
 
+    private fun requestBatteryExemption() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:$packageName")
+                })
+            }
+        }
+    }
+
     private fun startConnection(serverIP: String, port: Int) {
+        requestBatteryExemption()
         isRunning = true
         serverIPEditText.visibility = View.GONE
         serverPortEditText.visibility = View.GONE
@@ -194,6 +225,8 @@ class MainActivity : AppCompatActivity() {
         isRunning = false
         networkManager?.disconnect()
         cameraManager?.stopCamera()
+        cameraLifecycle?.destroy()
+        cameraLifecycle = null
         runOnUiThread {
             cameraAreaLayout.visibility = View.GONE
             statsTextView.text = ""
@@ -219,8 +252,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        // Detach Preview surface so CameraX doesn't fight a destroyed window surface.
+        // ImageAnalysis keeps running via AlwaysActiveLifecycleOwner.
+        if (isRunning) cameraManager?.detachPreviewSurface()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Restore live preview when coming back to foreground.
+        if (isRunning) cameraManager?.reattachPreviewSurface()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        weakInstance = null
         stopConnection()
     }
 }
