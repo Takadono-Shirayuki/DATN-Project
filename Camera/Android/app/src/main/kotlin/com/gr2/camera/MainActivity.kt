@@ -3,7 +3,6 @@ package com.gr2.camera
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.graphics.ImageFormat
@@ -105,8 +104,8 @@ class MainActivity : AppCompatActivity() {
     private fun onFrameAvailable(image: ImageProxy) {
         if (!isRunning) return
         try {
-            val bitmap = imageProxyToBitmap(image)
-            networkManager?.sendFrame(bitmap, 0, 0)
+            val jpeg = imageProxyToJpeg(image)
+            networkManager?.sendFrameJpeg(jpeg)
             frameCount++
             updateStats()
         } catch (e: Exception) {
@@ -114,39 +113,44 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
+    /** Convert ImageProxy (YUV_420_888) → JPEG bytes in a single encode step. */
+    private fun imageProxyToJpeg(image: ImageProxy): ByteArray {
         val planes = image.planes
         val yPlane = planes[0]
         val uPlane = planes[1]
         val vPlane = planes[2]
 
         val ySize = yPlane.buffer.remaining()
-        val u = ByteArray(uPlane.buffer.remaining())
-        val v = ByteArray(vPlane.buffer.remaining())
-        val nv21 = ByteArray(ySize + u.size + v.size)
+        // NV21 layout: Y plane (ySize bytes) + interleaved VU (ySize/2 bytes)
+        val nv21 = ByteArray(ySize + image.width * image.height / 2)
 
         yPlane.buffer.get(nv21, 0, ySize)
+
         val uvPixelStride = uPlane.pixelStride
         if (uvPixelStride == 1) {
+            // Planar U and V — interleave manually into NV21 (V first, then U)
+            val u = ByteArray(uPlane.buffer.remaining())
+            val v = ByteArray(vPlane.buffer.remaining())
             uPlane.buffer.get(u)
             vPlane.buffer.get(v)
-            for (i in u.indices) {
+            val uvSize = minOf(u.size, v.size)
+            for (i in 0 until uvSize) {
+                nv21[ySize + 2 * i]     = v[i]
                 nv21[ySize + 2 * i + 1] = u[i]
-                nv21[ySize + 2 * i] = v[i]
             }
         } else {
-            val uvBuffer = uPlane.buffer
-            uvBuffer.get(u)
-            for (i in u.indices step 2) {
-                nv21[ySize + i] = v[i / 2]
-                nv21[ySize + i + 1] = u[i]
-            }
+            // pixelStride == 2: U and V share the same interleaved memory.
+            // vPlane buffer starts at V0 → layout is V0,U0,V1,U1,... = NV21 order.
+            val vBuffer = vPlane.buffer
+            val uvData = ByteArray(vBuffer.remaining())
+            vBuffer.get(uvData)
+            System.arraycopy(uvData, 0, nv21, ySize, minOf(uvData.size, nv21.size - ySize))
         }
 
         val yuvImage = YuvImage(nv21, ImageFormat.NV21, image.width, image.height, null)
         val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 90, out)
-        return android.graphics.BitmapFactory.decodeByteArray(out.toByteArray(), 0, out.size())
+        yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 75, out)
+        return out.toByteArray()
     }
 
     private fun onConnectButtonClick() {

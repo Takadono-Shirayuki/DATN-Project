@@ -75,42 +75,31 @@ class NetworkManager(
         onStatusChanged(false)
     }
 
+    /** Send a pre-encoded JPEG byte array — no second compression step. */
+    fun sendFrameJpeg(jpegBytes: ByteArray) {
+        if (!isConnected || webSocket == null) {
+            Log.w(TAG, "Not connected")
+            return
+        }
+        try {
+            val base64 = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+            val json = "{\"type\":\"frame\",\"frame\":\"$base64\"}"
+            webSocket?.send(json)
+        } catch (e: Exception) {
+            Log.e(TAG, "Send frame failed: $e")
+        }
+    }
+
+    @Deprecated("Use sendFrameJpeg to avoid double JPEG encode")
     fun sendFrame(
         bitmap: Bitmap,
         personCount: Int,
         inferenceMs: Long,
         metadata: Map<String, Any> = emptyMap()
     ) {
-        if (!isConnected || webSocket == null) {
-            Log.w(TAG, "Not connected")
-            return
-        }
-
-        try {
-            // Compress bitmap to JPEG
-            val baos = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 80, baos)
-            val bytes = baos.toByteArray()
-            val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-
-            val message = mapOf(
-                "type" to "frame",
-                "frame" to base64,
-                "metadata" to mapOf(
-                    "mode" to "recognition",
-                    "detections" to personCount,
-                    "pipeline" to "yolo_tflite_silhouette",
-                    "inference_ms" to inferenceMs,
-                    "timestamp" to System.currentTimeMillis()
-                ) + metadata
-            )
-
-            val json = org.json.JSONObject(message).toString()
-            webSocket?.send(json)
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Send frame failed: $e")
-        }
+        val baos = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 75, baos)
+        sendFrameJpeg(baos.toByteArray())
     }
 
     fun sendRegistration(deviceName: String, deviceType: String) {

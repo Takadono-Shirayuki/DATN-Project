@@ -20,8 +20,10 @@ import numpy as np
 import logging
 import sys
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import websockets
+import torch
 from ultralytics import YOLO
 
 # ---------------------------------------------------------------------------
@@ -55,6 +57,54 @@ def _iou(boxA, boxB):
     return inter / float(areaA + areaB - inter)
 
 
+def _crop_silhouette_square(mask_full, bbox):
+    """
+    Crop a square silhouette patch from the full-frame mask.
+
+    Center  = center of the bounding box.
+    Side    = max(bbox_width, bbox_height)  → square crop.
+    Regions that fall outside the frame are filled with 0 (black).
+
+    Args:
+        mask_full : np.ndarray (H, W) uint8 — full-frame binary mask (0 or 255)
+        bbox      : [x1, y1, x2, y2] ints
+
+    Returns:
+        np.ndarray (side, side) uint8
+    """
+    H, W = mask_full.shape[:2]
+    x1, y1, x2, y2 = bbox
+
+    cx = (x1 + x2) // 2
+    cy = (y1 + y2) // 2
+    half = max(x2 - x1, y2 - y1) // 2
+
+    # Crop boundaries in the full frame
+    src_x0 = cx - half
+    src_y0 = cy - half
+    src_x1 = cx + half
+    src_y1 = cy + half
+
+    side = src_x1 - src_x0  # == 2 * half
+    canvas = np.zeros((side, side), dtype=np.uint8)
+
+    # Intersection of crop window with actual frame
+    fx0 = max(src_x0, 0)
+    fy0 = max(src_y0, 0)
+    fx1 = min(src_x1, W)
+    fy1 = min(src_y1, H)
+
+    if fx1 > fx0 and fy1 > fy0:
+        # Corresponding destination in canvas
+        dx0 = fx0 - src_x0
+        dy0 = fy0 - src_y0
+        dx1 = dx0 + (fx1 - fx0)
+        dy1 = dy0 + (fy1 - fy0)
+        canvas[dy0:dy1, dx0:dx1] = mask_full[fy0:fy1, fx0:fx1]
+
+    return canvas
+
+
 # ---------------------------------------------------------------------------
 # ML Pipeline
 # ---------------------------------------------------------------------------
@@ -69,11 +119,18 @@ class RecognitionPipeline:
     """
 
     def __init__(self):
+        self._use_gpu = torch.cuda.is_available()
+        device_str = 'cuda:0' if self._use_gpu else 'cpu'
+
+        logger.info(f"Device: {'GPU (CUDA)' if self._use_gpu else 'CPU'}")
+
         logger.info("Loading YOLOv8s-pose (detection + keypoints + ByteTrack)...")
         self.pose_model = YOLO(os.path.join(_HERE, 'yolov8s-pose.pt'))
+        self.pose_model.to(device_str)
 
         logger.info("Loading YOLOv8n-seg (silhouette extraction)...")
         self.seg_model = YOLO(os.path.join(_HERE, 'yolov8n-seg.pt'))
+        self.seg_model.to(device_str)
 
         logger.info("Loading ActionRecognizer (BiLSTM 128-hidden, 2-layer)...")
         self.action_recognizer = ActionRecognizer(
@@ -85,6 +142,13 @@ class RecognitionPipeline:
             model_path=os.path.join(_HERE, 'open_set', 'encoder_resnet.pth'),
             database_path=os.path.join(_HERE, 'database.json')
         )
+
+        # Warmup both models so first-frame latency is low
+        if self._use_gpu:
+            _dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+            self.pose_model(_dummy, imgsz=640, verbose=False, half=True)
+            self.seg_model(_dummy, imgsz=640, verbose=False, half=True)
+            logger.info("GPU warmup done.")
 
         logger.info("All models loaded successfully.")
 
@@ -100,20 +164,37 @@ class RecognitionPipeline:
         t0 = datetime.now()
         h, w = frame_bgr.shape[:2]
 
+        # Resize frame to max 640px wide before inference to reduce GPU transfer cost.
+        # Scale factor is used to map detections back to original coordinates.
+        infer_w = 640
+        if w > infer_w:
+            scale = infer_w / w
+            infer_h = int(h * scale)
+            infer_frame = cv2.resize(frame_bgr, (infer_w, infer_h))
+        else:
+            scale = 1.0
+            infer_frame = frame_bgr
+        ih, iw = infer_frame.shape[:2]
+
+        half_flag = self._use_gpu
+
         # ------------------------------------------------------------------
         # Step 1 — Pose model with ByteTrack: bboxes + keypoints + track_ids
         # ------------------------------------------------------------------
         pose_res = self.pose_model.track(
-            frame_bgr,
+            infer_frame,
             persist=True,
             tracker='bytetrack.yaml',
             conf=0.3,
             classes=[0],  # person only
-            verbose=False
+            verbose=False,
+            half=half_flag,
+            imgsz=640,
         )
         pr = pose_res[0]
 
         tracked_persons = []  # list of (track_id:int, bbox:[x1,y1,x2,y2], kps:np(17,3))
+        has_walking_candidate = False
         if pr.boxes is not None and pr.boxes.id is not None:
             bboxes    = pr.boxes.xyxy.cpu().numpy()
             track_ids = pr.boxes.id.cpu().numpy().astype(int)
@@ -121,26 +202,33 @@ class RecognitionPipeline:
 
             for i, (box, tid) in enumerate(zip(bboxes, track_ids)):
                 kps = kps_data[i] if kps_data is not None else np.zeros((17, 3), dtype=np.float32)
-                tracked_persons.append((int(tid), box.tolist(), kps))
+                # Scale bbox back to original frame coordinates
+                sx1, sy1, sx2, sy2 = box
+                orig_box = [sx1 / scale, sy1 / scale, sx2 / scale, sy2 / scale]
+                tracked_persons.append((int(tid), orig_box, kps))
+
+            # Quick pre-check: are any persons likely walking (rough heuristic: bbox tall)
+            has_walking_candidate = len(tracked_persons) > 0
 
         # ------------------------------------------------------------------
-        # Step 2 — Segmentation model: silhouette masks
+        # Step 2 — Segmentation model: only run when there are tracked persons
         # ------------------------------------------------------------------
-        seg_res = self.seg_model(frame_bgr, conf=0.3, classes=[0], verbose=False)
-        sr = seg_res[0]
-
-        # Combined mask canvas for visualization
-        vis_mask = np.zeros((h, w), dtype=np.uint8)
-
         seg_pairs = []  # list of (bbox:[x1,y1,x2,y2], mask:np(h,w) uint8 0/255)
-        if sr.masks is not None:
-            seg_boxes = sr.boxes.xyxy.cpu().numpy()
-            for i, seg_mask in enumerate(sr.masks.data):
-                mask_np = (seg_mask.cpu().numpy() * 255).astype(np.uint8)
-                mask_np = cv2.resize(mask_np, (w, h), interpolation=cv2.INTER_NEAREST)
-                mask_np = (mask_np > 127).astype(np.uint8) * 255
-                vis_mask = cv2.bitwise_or(vis_mask, mask_np)
-                seg_pairs.append((seg_boxes[i].tolist(), mask_np))
+        if has_walking_candidate:
+            seg_res = self.seg_model(infer_frame, conf=0.3, classes=[0], verbose=False,
+                                     half=half_flag, imgsz=640)
+            sr = seg_res[0]
+
+            if sr.masks is not None:
+                seg_boxes = sr.boxes.xyxy.cpu().numpy()
+                for i, seg_mask in enumerate(sr.masks.data):
+                    mask_np = (seg_mask.cpu().numpy() * 255).astype(np.uint8)
+                    # Resize mask to original frame size
+                    mask_np = cv2.resize(mask_np, (w, h), interpolation=cv2.INTER_NEAREST)
+                    mask_np = (mask_np > 127).astype(np.uint8) * 255
+                    # Scale seg bbox back to original coords
+                    sb = seg_boxes[i] / scale
+                    seg_pairs.append((sb.tolist(), mask_np))
 
         # Assign best-matching silhouette mask to each tracked person (by IoU)
         person_masks = {}  # {track_id: mask_uint8}
@@ -170,6 +258,8 @@ class RecognitionPipeline:
 
             # --- Gait ---
             mask = person_masks.get(tid)
+            if mask is not None:
+                mask = _crop_silhouette_square(mask, [x1, y1, x2, y2])
             gait_label = self.gait_recognizer.update(pid, frame_bgr, is_walking, mask=mask)
 
             persons_info.append({
@@ -184,7 +274,7 @@ class RecognitionPipeline:
         # ------------------------------------------------------------------
         # Step 4 — Build visualization
         # ------------------------------------------------------------------
-        vis_frame = self._draw_visualization(frame_bgr, vis_mask, persons_info)
+        vis_frame = self._draw_visualization(frame_bgr, persons_info)
 
         inference_ms = (datetime.now() - t0).total_seconds() * 1000
         stats = {
@@ -193,19 +283,13 @@ class RecognitionPipeline:
         }
         return vis_frame, persons_info, stats
 
-    def _draw_visualization(self, original_bgr, mask, persons):
+    def _draw_visualization(self, original_bgr, persons):
         """
-        Composite visualization:
-          - Silhouette overlay on slightly darkened original
+        Draw bounding boxes and recognition labels on the original frame.
           - Bounding boxes (green = walking, orange = not walking)
           - Text labels: person ID, action %, gait identity
         """
-        silhouette_bgr = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-        gray_original  = cv2.cvtColor(
-            cv2.cvtColor(original_bgr, cv2.COLOR_BGR2GRAY),
-            cv2.COLOR_GRAY2BGR
-        )
-        vis = cv2.addWeighted(silhouette_bgr, 0.65, gray_original, 0.35, 0)
+        vis = original_bgr.copy()
 
         for p in persons:
             x1, y1, x2, y2 = p['bbox']
@@ -230,6 +314,73 @@ class RecognitionPipeline:
 
 
 # ---------------------------------------------------------------------------
+# Per-camera session
+# ---------------------------------------------------------------------------
+
+class _CameraSession:
+    """Isolated processing session for one camera or video source.
+
+    Each session owns its own RecognitionPipeline so ByteTrack IDs and
+    per-person action/gait buffers are never shared across sources.
+    The pipeline is loaded lazily in a background thread when the session
+    starts, so the WebSocket receive loop is never blocked.
+    """
+
+    def __init__(self, device_label: str, server: 'RecognitionServer'):
+        self.device_label = device_label
+        self._server = server
+        self.queue: asyncio.Queue = asyncio.Queue()
+        self._task: asyncio.Task | None = None
+
+    def start(self):
+        self._task = asyncio.create_task(self._run(), name=f'session-{self.device_label}')
+
+    def stop(self):
+        if self._task:
+            self._task.cancel()
+
+    async def _run(self):
+        loop = asyncio.get_event_loop()
+        logger.info(f"[{self.device_label}] Loading pipeline…")
+        try:
+            pipeline = await loop.run_in_executor(
+                self._server._executor, RecognitionPipeline
+            )
+        except Exception as e:
+            logger.error(f"[{self.device_label}] Pipeline load failed: {e}", exc_info=True)
+            return
+        logger.info(f"[{self.device_label}] Pipeline ready.")
+
+        frame_count = 0
+        while True:
+            frame = await self.queue.get()
+            if frame is None:           # sentinel — stop after all frames processed
+                break
+            try:
+                vis_frame, persons, stats = await loop.run_in_executor(
+                    self._server._executor, pipeline.process_frame, frame
+                )
+            except Exception as e:
+                logger.error(f"[{self.device_label}] Pipeline error: {e}", exc_info=True)
+                continue
+
+            await self._server._broadcast_frame(vis_frame, persons, stats, self.device_label)
+            frame_count += 1
+            if frame_count % 30 == 0:
+                logger.info(
+                    f"[{self.device_label}] frames={frame_count} | "
+                    f"persons={stats['person_count']} | "
+                    f"inference={stats['inference_ms']:.1f}ms | "
+                    f"queue={self.queue.qsize()}"
+                )
+
+        # Sentinel received — all frames processed, notify monitors.
+        logger.info(f"[{self.device_label}] All frames processed.")
+        self._server._sessions.pop(self.device_label, None)
+        await self._server._broadcast_video_ended(self.device_label)
+
+
+# ---------------------------------------------------------------------------
 # WebSocket Server
 # ---------------------------------------------------------------------------
 
@@ -237,98 +388,168 @@ class RecognitionServer:
     def __init__(self, host='0.0.0.0', port=3001):
         self.host = host
         self.port = port
-        self.pipeline = RecognitionPipeline()
-        self.monitors: set = set()   # connected React UI clients
+        self.monitors: set = set()
         self.frame_count = 0
+        # Shared thread pool — sessions submit blocking ML calls here.
+        # max_workers=4 lets 2 cameras run nearly in parallel on GPU.
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix='pipeline')
+        # Active sessions keyed by device_label.
+        self._sessions: dict[str, _CameraSession] = {}
+
+    # ------------------------------------------------------------------
+    # Shared broadcast helper
+    # ------------------------------------------------------------------
+
+    async def _broadcast_frame(self, vis_frame, persons, stats, device_label: str):
+        _, enc = cv2.imencode('.jpg', vis_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        vis_b64 = base64.b64encode(enc.tobytes()).decode('utf-8')
+
+        self.frame_count += 1
+        payload = json.dumps({
+            'type':    'frame',
+            'frame':   vis_b64,
+            'persons': persons,
+            'metadata': {
+                'person_count': stats['person_count'],
+                'inference_ms': stats['inference_ms'],
+                'timestamp':    datetime.now().isoformat(),
+                'device':       device_label,
+            },
+        })
+
+        dead = set()
+        for ws in self.monitors:
+            try:
+                await ws.send(payload)
+            except Exception:
+                dead.add(ws)
+        self.monitors -= dead
+
+    async def _broadcast_video_ended(self, device_label: str):
+        dead = set()
+        for ws in self.monitors:
+            try:
+                await ws.send(json.dumps({'type': 'video_ended', 'device': device_label}))
+            except Exception:
+                dead.add(ws)
+        self.monitors -= dead
+
+    async def _broadcast_error(self, msg: str):
+        dead = set()
+        for ws in self.monitors:
+            try:
+                await ws.send(json.dumps({'type': 'error', 'message': msg}))
+            except Exception:
+                dead.add(ws)
+        self.monitors -= dead
+
+    # ------------------------------------------------------------------
+    # Connection routing
+    # ------------------------------------------------------------------
 
     async def handle_connection(self, websocket):
         path = websocket.request.path
         if path == '/monitor':
             await self._handle_monitor(websocket)
         else:
-            # Any other path (including /camera) treated as camera client
             await self._handle_camera(websocket)
 
     async def _handle_monitor(self, websocket):
-        """React UI client — just receives broadcast results."""
+        """React UI client — receives broadcast results and can send video_path commands."""
         client_addr = websocket.remote_address
         logger.info(f"Monitor connected: {client_addr}")
         self.monitors.add(websocket)
         try:
-            await websocket.wait_closed()
+            async for message in websocket:
+                try:
+                    msg = json.loads(message)
+                    if msg.get('type') == 'video_path':
+                        path = msg.get('path', '').strip()
+                        asyncio.ensure_future(self._play_video_file(path))
+                except Exception:
+                    pass
+        except websockets.exceptions.ConnectionClosed:
+            pass
         finally:
             self.monitors.discard(websocket)
             logger.info(f"Monitor disconnected: {client_addr}")
 
     async def _handle_camera(self, websocket):
-        """Android camera client — receives raw JPEG frames."""
+        """Android camera — drain WebSocket buffer fast, enqueue decoded frames."""
         client_addr = websocket.remote_address
+        device_label = str(client_addr[0]) if client_addr else 'camera'
         logger.info(f"Camera connected: {client_addr}")
+
+        # One session per device_label; if the same IP reconnects, reuse slot.
+        session = _CameraSession(device_label, self)
+        self._sessions[device_label] = session
+        session.start()
+
         try:
             async for message in websocket:
-                await self._process_message(message, client_addr)
+                try:
+                    data = json.loads(message)
+                    frame_b64 = data.get('frame')
+                    if not frame_b64:
+                        continue
+                    frame_bytes = base64.b64decode(frame_b64)
+                    np_arr = np.frombuffer(frame_bytes, np.uint8)
+                    frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                    if frame is not None:
+                        await session.queue.put(frame)
+                except Exception as e:
+                    logger.warning(f"[{device_label}] Frame decode error: {e}")
         except websockets.exceptions.ConnectionClosed:
             logger.info(f"Camera disconnected: {client_addr}")
         except Exception as e:
-            logger.error(f"Camera client error: {e}", exc_info=True)
+            logger.error(f"[{device_label}] Camera client error: {e}", exc_info=True)
+        finally:
+            session.stop()
+            self._sessions.pop(device_label, None)
 
-    async def _process_message(self, message, client_addr):
-        """Decode frame, run ML pipeline in thread pool, broadcast to monitors."""
+    async def _play_video_file(self, video_path: str):
+        """Stream a local video file through its own isolated session."""
+        video_path = video_path.strip('"\'')
+
+        if not os.path.isfile(video_path):
+            await self._broadcast_error(f'File not found: {video_path}')
+            logger.warning(f"Video file not found: {video_path}")
+            return
+
+        logger.info(f"Playing video file: {video_path}")
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            await self._broadcast_error(f'Cannot open video: {video_path}')
+            logger.error(f"cv2.VideoCapture failed: {video_path}")
+            return
+
+        basename = os.path.basename(video_path)
+        device_label = f'video:{basename}'
+
+        # Stop any previous session for this video path before starting a new one.
+        if device_label in self._sessions:
+            self._sessions.pop(device_label).stop()
+
+        session = _CameraSession(device_label, self)
+        self._sessions[device_label] = session
+        session.start()
+
+        loop = asyncio.get_event_loop()
         try:
-            data      = json.loads(message)
-            frame_b64 = data.get('frame')
-            if not frame_b64:
-                return
-
-            frame_bytes = base64.b64decode(frame_b64)
-            np_arr      = np.frombuffer(frame_bytes, np.uint8)
-            frame       = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            if frame is None:
-                return
-
-            # Run blocking inference in a thread pool so we don't stall the event loop
-            loop = asyncio.get_event_loop()
-            vis_frame, persons, stats = await loop.run_in_executor(
-                None, self.pipeline.process_frame, frame
-            )
-
-            # Encode visualization
-            _, enc = cv2.imencode('.jpg', vis_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            vis_b64 = base64.b64encode(enc.tobytes()).decode('utf-8')
-
-            self.frame_count += 1
-            payload = json.dumps({
-                'type':    'frame',
-                'frame':   vis_b64,
-                'persons': persons,
-                'metadata': {
-                    'person_count': stats['person_count'],
-                    'inference_ms': stats['inference_ms'],
-                    'timestamp':    datetime.now().isoformat(),
-                    'device':       str(client_addr[0]) if client_addr else 'unknown',
-                },
-            })
-
-            # Fan-out to all monitor clients
-            dead = set()
-            for ws in self.monitors:
-                try:
-                    await ws.send(payload)
-                except Exception:
-                    dead.add(ws)
-            self.monitors -= dead
-
-            if self.frame_count % 30 == 0:
-                logger.info(
-                    f"Frame #{self.frame_count} | "
-                    f"Persons: {stats['person_count']} | "
-                    f"Inference: {stats['inference_ms']:.1f} ms"
-                )
-
-        except json.JSONDecodeError:
-            logger.warning("Malformed JSON message from camera")
+            while cap.isOpened():
+                ret, frame = await loop.run_in_executor(None, cap.read)
+                if not ret:
+                    break
+                await session.queue.put(frame)
+            # Sentinel — worker drains remaining frames then exits cleanly.
+            await session.queue.put(None)
         except Exception as e:
-            logger.error(f"Error processing frame: {e}", exc_info=True)
+            await self._broadcast_error(f'Video read error: {e}')
+            session.stop()
+            self._sessions.pop(device_label, None)
+        finally:
+            cap.release()
+            logger.info(f"Finished reading video: {video_path}")
 
     async def start(self):
         async with websockets.serve(self.handle_connection, self.host, self.port):

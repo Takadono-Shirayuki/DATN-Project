@@ -62,6 +62,7 @@ class GaitRecognizer:
         self.person_labels = {}   # {person_id: recognized_name}
         self.last_recognition_frame = {}  # {person_id: frame_count}
         self.frame_count = {}  # {person_id: total_frames_seen}
+        self._gei_saved = False  # DEBUG: save GEI once
     
     def update(self, person_id, frame, is_walking, mask=None, keypoints=None):
         """
@@ -131,7 +132,14 @@ class GaitRecognizer:
                 return None
             
             gei = make_gei_from_frames(frames, size=(224, 224))
-            
+
+            # DEBUG: lưu GEI đầu tiên tạo được để kiểm tra
+            if not self._gei_saved:
+                debug_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug_gei.png')
+                cv2.imwrite(debug_path, (gei * 255).astype(np.uint8))
+                print(f"[DEBUG] GEI saved to {debug_path}")
+                self._gei_saved = True
+
             gei_tensor = torch.from_numpy(gei).unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
             gei_tensor = (gei_tensor - 0.5) / 0.5  # Normalize
             gei_tensor = gei_tensor.to(self.device)

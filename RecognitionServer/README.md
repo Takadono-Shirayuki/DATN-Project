@@ -155,7 +155,7 @@ Server in log ra console:
 
 ## Tích hợp với hệ thống
 
-Server này là một phần của hệ thống GR2:
+Server này là một phần của hệ thống GAIT Recognition Camera:
 
 ```
 RecognitionServer (Port 3001) ← Android app (recognition mode)

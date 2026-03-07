@@ -199,7 +199,7 @@ class CameraApp:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='GR2 Camera App - Send camera feed to server'
+        description='GAIT Recognition Camera App - Send camera feed to server'
     )
     parser.add_argument(
         '--mode',
