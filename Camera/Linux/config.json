@@ -1,0 +1,27 @@
+{
+  "server": {
+    "ip": "192.168.1.100",
+    "port": 3001
+  },
+  "camera": {
+    "device_id": 0,
+    "frame_width": 640,
+    "frame_height": 480,
+    "fps": 30
+  },
+  "auth": {
+    "password_salt": "6baa09498478e2440c2b7756b8b94c62fe991d800eb095615608f1eb4e77a047",
+    "password_hash": "5e1979f2ccac14a0075b53f38a1baecc7f0d4a379a3d254ab178497a9b78d9e9"
+  },
+  "device": {
+    "name": "gr2-camera-linux",
+    "type": "recognition"
+  },
+  "storage": {
+    "captures_dir": "C:\\Users\\ADMIN\\gr2_captures"
+  },
+  "web": {
+    "port": 8080,
+    "secret_key": "88b0886f9f8e99f402532aa41f7d79be4dd10009de7cd03876b07c50a17aec13"
+  }
+}

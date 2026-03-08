@@ -41,18 +41,103 @@
         android:padding="16dp"
         android:background="@android:color/darker_gray">
 
-        <!-- Server IP Input -->
-        <EditText
-            android:id="@+id/serverIPEditText"
+        <!-- Server IP Input — 4 separate octet fields -->
+        <LinearLayout
+            android:id="@+id/ipInputLayout"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="@string/server_ip_hint"
-            android:inputType="text"
-            android:text="192.168.1.100"
+            android:orientation="horizontal"
             android:layout_marginBottom="8dp"
-            android:padding="12dp"
-            android:textColorHint="@android:color/white"
-            android:textColor="@android:color/white" />
+            android:gravity="center_vertical">
+
+            <EditText
+                android:id="@+id/ipOctet1"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="0"
+                android:inputType="number"
+                android:maxLength="3"
+                android:padding="12dp"
+                android:gravity="center"
+                android:imeOptions="actionNext"
+                android:nextFocusForward="@id/ipOctet2"
+                android:textColorHint="@android:color/white"
+                android:textColor="@android:color/white" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="."
+                android:textColor="@android:color/white"
+                android:textSize="20sp"
+                android:paddingLeft="2dp"
+                android:paddingRight="2dp" />
+
+            <EditText
+                android:id="@+id/ipOctet2"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="0"
+                android:inputType="number"
+                android:maxLength="3"
+                android:padding="12dp"
+                android:gravity="center"
+                android:imeOptions="actionNext"
+                android:nextFocusForward="@id/ipOctet3"
+                android:textColorHint="@android:color/white"
+                android:textColor="@android:color/white" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="."
+                android:textColor="@android:color/white"
+                android:textSize="20sp"
+                android:paddingLeft="2dp"
+                android:paddingRight="2dp" />
+
+            <EditText
+                android:id="@+id/ipOctet3"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="0"
+                android:inputType="number"
+                android:maxLength="3"
+                android:padding="12dp"
+                android:gravity="center"
+                android:imeOptions="actionNext"
+                android:nextFocusForward="@id/ipOctet4"
+                android:textColorHint="@android:color/white"
+                android:textColor="@android:color/white" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="."
+                android:textColor="@android:color/white"
+                android:textSize="20sp"
+                android:paddingLeft="2dp"
+                android:paddingRight="2dp" />
+
+            <EditText
+                android:id="@+id/ipOctet4"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="0"
+                android:inputType="number"
+                android:maxLength="3"
+                android:padding="12dp"
+                android:gravity="center"
+                android:imeOptions="actionNext"
+                android:nextFocusForward="@id/serverPortEditText"
+                android:textColorHint="@android:color/white"
+                android:textColor="@android:color/white" />
+
+        </LinearLayout>
 
         <!-- Server Port Input -->
         <EditText

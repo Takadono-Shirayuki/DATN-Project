@@ -9,16 +9,15 @@ camera:
 
 # Server Configuration
 server:
-  # Set via command line: --server-ip, --server-port
-  # Default values:
-  ip: "localhost"
-  port: 3000
+  # Entered interactively at startup (mirrors Android IP/Port input UI)
+  ip: "192.168.1.100"
+  port: 3001          # matches Android default
   timeout: 10
 
-# Device Configuration
+# Device Configuration  (mirrors Android registration message)
 device:
-  device_name: "camera-001"
-  device_type: "camera"  # camera or phone
+  device_name: "gr2-camera-linux"   # Android uses "gr2-camera-android"
+  device_type: "recognition"         # same as Android
   mode: "streaming"  # streaming or recognition
 
 # YOLO Models

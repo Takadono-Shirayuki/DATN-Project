@@ -1,5 +1,8 @@
 # Network Client Module
-# Communicates with the UI server via WebSocket (/camera endpoint)
+# Communicates with the recognition server via WebSocket (/camera endpoint).
+# Protocol mirrors the Android app (gr2-camera-android):
+#   register : {"type": "register", "device_name": "...", "device_type": "..."}
+#   frame    : {"type": "frame",    "frame": "<base64-JPEG>"}
 
 import json
 import threading
@@ -13,13 +16,16 @@ try:
 except ImportError:
     raise ImportError("websocket-client is required: pip install websocket-client")
 
+# JPEG encode quality — matches Android's 75 % setting
+JPEG_QUALITY = 75
+
 
 class NetworkClient:
-    def __init__(self, server_ip: str, server_port: int = 3000, timeout: int = 10):
+    def __init__(self, server_ip: str, server_port: int = 3001, timeout: int = 10):
         """
         Args:
             server_ip:   server IP address
-            server_port: server port (default 3000 — same as Vite UI)
+            server_port: server port (default 3001 — matches Android default)
             timeout:     seconds to wait for initial connection
         """
         self.url = f"ws://{server_ip}:{server_port}/camera"
@@ -83,17 +89,21 @@ class NetworkClient:
         if self._ws_app:
             self._ws_app.close()
 
-    def send_frame(self, frame: np.ndarray, metadata: dict = None):
-        """Encode frame as JPEG and send to server."""
+    def send_frame(self, frame: np.ndarray):
+        """
+        Encode *frame* as JPEG and send to server.
+
+        Message format — identical to Android:
+            {"type": "frame", "frame": "<base64-JPEG>"}
+        """
         if not self.is_connected or self._ws is None:
             return
         try:
-            _, buffer = cv2.imencode('.jpg', frame)
+            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
             frame_b64 = base64.b64encode(buffer).decode('utf-8')
             message = {
                 'type': 'frame',
                 'frame': frame_b64,
-                'metadata': metadata or {}
             }
             self._ws.send(json.dumps(message))
         except Exception as e:

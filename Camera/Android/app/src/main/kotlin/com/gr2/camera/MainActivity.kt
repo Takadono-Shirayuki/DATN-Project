@@ -11,11 +11,14 @@ import android.graphics.Rect
 import android.graphics.YuvImage
 import android.graphics.ImageFormat
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -27,6 +30,7 @@ import com.gr2.camera.camera.CameraManager
 import com.gr2.camera.network.NetworkManager
 import java.io.ByteArrayOutputStream
 import java.lang.ref.WeakReference
+import java.net.NetworkInterface
 
 class MainActivity : AppCompatActivity() {
 
@@ -44,7 +48,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cameraAreaLayout: FrameLayout
     private lateinit var previewView: PreviewView
     private lateinit var switchCameraButton: Button
-    private lateinit var serverIPEditText: EditText
+    private lateinit var ipInputLayout: LinearLayout
+    private lateinit var ipOctet1: EditText
+    private lateinit var ipOctet2: EditText
+    private lateinit var ipOctet3: EditText
+    private lateinit var ipOctet4: EditText
     private lateinit var serverPortEditText: EditText
     private lateinit var connectButton: Button
     private lateinit var statusTextView: TextView
@@ -70,16 +78,70 @@ class MainActivity : AppCompatActivity() {
         cameraAreaLayout = findViewById(R.id.cameraAreaLayout)
         previewView = findViewById(R.id.previewView)
         switchCameraButton = findViewById(R.id.switchCameraButton)
-        serverIPEditText = findViewById(R.id.serverIPEditText)
+        ipInputLayout = findViewById(R.id.ipInputLayout)
+        ipOctet1 = findViewById(R.id.ipOctet1)
+        ipOctet2 = findViewById(R.id.ipOctet2)
+        ipOctet3 = findViewById(R.id.ipOctet3)
+        ipOctet4 = findViewById(R.id.ipOctet4)
         serverPortEditText = findViewById(R.id.serverPortEditText)
         connectButton = findViewById(R.id.connectButton)
         statusTextView = findViewById(R.id.statusTextView)
         statsTextView = findViewById(R.id.statsTextView)
 
+        prefillDeviceIP()
+        setupOctetAutoAdvance()
+
         connectButton.setOnClickListener { onConnectButtonClick() }
         switchCameraButton.setOnClickListener {
             cameraManager?.switchCamera()
         }
+    }
+
+    /** Fill the first 3 octets from the device's current Wi-Fi/LAN IP address. */
+    private fun prefillDeviceIP() {
+        val deviceIP = getDeviceIPAddress()
+        if (deviceIP != null) {
+            val parts = deviceIP.split(".")
+            if (parts.size == 4) {
+                ipOctet1.setText(parts[0])
+                ipOctet2.setText(parts[1])
+                ipOctet3.setText(parts[2])
+                // Leave octet 4 empty for the user to enter
+                ipOctet4.setText("")
+            }
+        }
+    }
+
+    private fun getDeviceIPAddress(): String? {
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
+            for (iface in interfaces.asSequence()) {
+                if (!iface.isUp || iface.isLoopback) continue
+                for (addr in iface.inetAddresses.asSequence()) {
+                    if (addr.isLoopbackAddress) continue
+                    val ip = addr.hostAddress ?: continue
+                    // IPv4 only
+                    if (!ip.contains(':')) return ip
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not get device IP: $e")
+        }
+        return null
+    }
+
+    /** Auto-advance focus to the next octet field when 3 digits are typed. */
+    private fun setupOctetAutoAdvance() {
+        fun makeWatcher(nextField: EditText?) = object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                if ((s?.length ?: 0) == 3) nextField?.requestFocus()
+            }
+        }
+        ipOctet1.addTextChangedListener(makeWatcher(ipOctet2))
+        ipOctet2.addTextChangedListener(makeWatcher(ipOctet3))
+        ipOctet3.addTextChangedListener(makeWatcher(ipOctet4))
     }
 
     private fun checkPermissions() {
@@ -173,11 +235,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onConnectButtonClick() {
-        val serverIP = serverIPEditText.text.toString().trim()
+        val o1 = ipOctet1.text.toString().trim()
+        val o2 = ipOctet2.text.toString().trim()
+        val o3 = ipOctet3.text.toString().trim()
+        val o4 = ipOctet4.text.toString().trim()
+        val serverIP = "$o1.$o2.$o3.$o4"
         val port = serverPortEditText.text.toString().toIntOrNull() ?: 3001
 
-        if (serverIP.isEmpty()) {
-            Toast.makeText(this, "Please enter server IP", Toast.LENGTH_SHORT).show()
+        if (o1.isEmpty() || o2.isEmpty() || o3.isEmpty() || o4.isEmpty()) {
+            Toast.makeText(this, "Please fill in all 4 IP octets", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -198,7 +264,7 @@ class MainActivity : AppCompatActivity() {
     private fun startConnection(serverIP: String, port: Int) {
         requestBatteryExemption()
         isRunning = true
-        serverIPEditText.visibility = View.GONE
+        ipInputLayout.visibility = View.GONE
         serverPortEditText.visibility = View.GONE
         connectButton.text = "Stop"
         updateStatus("Connecting to $serverIP:$port…")
@@ -231,7 +297,7 @@ class MainActivity : AppCompatActivity() {
             cameraAreaLayout.visibility = View.GONE
             statsTextView.text = ""
             connectButton.text = "Connect"
-            serverIPEditText.visibility = View.VISIBLE
+            ipInputLayout.visibility = View.VISIBLE
             serverPortEditText.visibility = View.VISIBLE
             updateStatus("Disconnected")
         }
