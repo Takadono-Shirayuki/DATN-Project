@@ -69,7 +69,7 @@ def _load_unicode_font(size: int = 16) -> ImageFont.FreeTypeFont:
     return font
 
 from action_classifier_module import ActionRecognizer
-from gait_recognizer_module import GaitRecognizer
+from GEI_gait_recognizer.gait_recognizer_module import GaitRecognizer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -173,14 +173,11 @@ class RecognitionPipeline:
 
         logger.info("Loading ActionRecognizer (BiLSTM 128-hidden, 2-layer)...")
         self.action_recognizer = ActionRecognizer(
-            model_path=os.path.join(_HERE, 'Behavier_recognition', 'action_classifier_128_2.pth')
+            model_path=os.path.join(_HERE, 'Action_classifier', 'action_classifier_128_2.pth')
         )
 
         logger.info("Loading GaitRecognizer (ResNet18 encoder + OpenSetMatcher)...")
-        self.gait_recognizer = GaitRecognizer(
-            model_path=os.path.join(_HERE, 'open_set', 'encoder_resnet.pth'),
-            database_path=os.path.join(_HERE, 'database.json')
-        )
+        self.gait_recognizer = GaitRecognizer()
 
         # Warmup both models so first-frame latency is low
         if self._use_gpu:
@@ -299,7 +296,7 @@ class RecognitionPipeline:
             mask = person_masks.get(tid)
             if mask is not None:
                 mask = _crop_silhouette_square(mask, [x1, y1, x2, y2])
-            gait_label = self.gait_recognizer.update(pid, frame_bgr, is_walking, mask=mask)
+            gait_label = self.gait_recognizer.push(pid, is_walking, mask=mask)
 
             persons_info.append({
                 'id':         pid,
